@@ -1,6 +1,7 @@
 // サイドバーなどで使う、シンプルなボタン。
 
 import * as Phaser from 'phaser';
+import { display } from './display';
 import { COLORS, FONT, TEXT_COLORS } from './layout';
 
 export interface ButtonOptions {
@@ -33,6 +34,7 @@ export class Button {
         fontSize: `${options.fontSize ?? 14}px`,
         color: TEXT_COLORS.main,
         align: 'center',
+        resolution: display.scale,
       })
       .setOrigin(0.5);
 

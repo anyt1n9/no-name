@@ -15,6 +15,8 @@ import {
   placeTerrain,
   placeTower,
   previewRoute,
+  retreatHero,
+  RETREAT_TIME,
   startCombat,
   step,
   towerInterval,
@@ -32,6 +34,7 @@ import {
   COLORS,
   FONT,
   GAME_HEIGHT,
+  GAME_WIDTH,
   MAP_HEIGHT,
   MAP_WIDTH,
   SIDEBAR_WIDTH,
@@ -40,6 +43,7 @@ import {
   toPixel,
   BOTTOM_HEIGHT,
 } from './layout';
+import { display, RENDER_SCALE_EVENT } from './display';
 import { drawIcon } from './icons';
 import { Button } from './ui';
 
@@ -69,12 +73,13 @@ interface HeroRow {
   name: Phaser.GameObjects.Text;
   status: Phaser.GameObjects.Text;
   deaths: Phaser.GameObjects.Text;
+  retreat: Button;
 }
 
 type TextStyle = Phaser.Types.GameObjects.Text.TextStyle;
 
 function textStyle(size: number, color: string = TEXT_COLORS.main, bold = false): TextStyle {
-  return { fontFamily: FONT, fontSize: `${size}px`, color, fontStyle: bold ? 'bold' : 'normal' };
+  return { fontFamily: FONT, fontSize: `${size}px`, color, fontStyle: bold ? 'bold' : 'normal', resolution: display.scale };
 }
 
 function seedFromUrl(): number | null {
@@ -161,6 +166,9 @@ export class BattleScene extends Phaser.Scene {
   create(): void {
     this.cameras.main.setBackgroundColor(COLORS.background);
     this.input.mouse?.disableContextMenu();
+    this.applyRenderScale(display.scale);
+    this.game.events.on(RENDER_SCALE_EVENT, this.applyRenderScale, this);
+    this.events.once('shutdown', () => this.game.events.off(RENDER_SCALE_EVENT, this.applyRenderScale, this));
 
     this.terrainGfx = this.add.graphics().setDepth(0);
     this.routeGfx = this.add.graphics().setDepth(2);
@@ -181,6 +189,17 @@ export class BattleScene extends Phaser.Scene {
     this.createSidebar();
     this.createBottomBar();
     this.setupInput();
+  }
+
+  /** 内部で描く倍率に合わせて、カメラの拡大率と文字の細かさを変える */
+  private applyRenderScale(scale: number): void {
+    const camera = this.cameras.main;
+    camera.setSize(Math.round(GAME_WIDTH * scale), Math.round(GAME_HEIGHT * scale));
+    camera.setZoom(scale);
+    camera.centerOn(GAME_WIDTH / 2, GAME_HEIGHT / 2);
+    for (const child of this.children.list) {
+      if (child instanceof Phaser.GameObjects.Text) child.setResolution(scale);
+    }
   }
 
   update(_time: number, delta: number): void {
@@ -236,7 +255,7 @@ export class BattleScene extends Phaser.Scene {
     this.sidebarInner = width;
 
     this.add.text(left, 10, 'ソウルパス（仮）', textStyle(18, TEXT_COLORS.main, true));
-    this.add.text(left, 34, `シード ${this.state.seed}　v0.1.3`, textStyle(11, TEXT_COLORS.sub));
+    this.add.text(left, 34, `シード ${this.state.seed}　v0.1.4`, textStyle(11, TEXT_COLORS.sub));
     this.phaseText = this.add.text(left, 54, '', textStyle(15, TEXT_COLORS.accent, true));
     this.statusText = this.add.text(left, 76, '', textStyle(14));
     this.waveText = this.add.text(left, 98, '', textStyle(12, TEXT_COLORS.sub));
@@ -311,7 +330,15 @@ export class BattleScene extends Phaser.Scene {
       const name = this.add.text(left + 42, y + 3, `${job.name} ${hero.name}`, textStyle(12, TEXT_COLORS.main, true));
       const deaths = this.add.text(left + width - 6, y + 3, '', textStyle(11, TEXT_COLORS.sub)).setOrigin(1, 0);
       const status = this.add.text(left + 42, y + 24, '', textStyle(11, TEXT_COLORS.sub));
-      this.heroRows.push({ uid: hero.uid, y, button, name, status, deaths });
+      const retreat = new Button(this, left + width - 52, y + 2, '撤退', {
+        width: 48,
+        height: 16,
+        fontSize: 11,
+        onClick: () => this.onRetreat(),
+        onHover: () => this.setInfo(`城へ戻して、ほかの英雄と交代できるようにする（Rキーでも撤退できる）。倒れた扱いにはならず、${RETREAT_TIME}秒休むとまた出撃できる。`),
+      });
+      retreat.setVisible(false);
+      this.heroRows.push({ uid: hero.uid, y, button, name, status, deaths, retreat });
     });
 
     // 味方と敵の見分け方
@@ -330,7 +357,7 @@ export class BattleScene extends Phaser.Scene {
     this.add.text(
       left,
       506,
-      ['左クリック：置く・建てる', '右クリック：英雄を移動', 'Esc：選択をやめる', 'Space：一時停止'].join('\n'),
+      ['左クリック：置く・建てる', '右クリック：英雄を移動', 'R：英雄を撤退', 'Esc：選択をやめる　Space：一時停止'].join('\n'),
       { ...textStyle(11, TEXT_COLORS.sub), lineSpacing: 3 },
     );
   }
@@ -357,6 +384,7 @@ export class BattleScene extends Phaser.Scene {
     const keyboard = this.input.keyboard;
     keyboard?.on('keydown-ESC', () => this.clearSelection());
     keyboard?.on('keydown-SPACE', () => this.togglePause());
+    keyboard?.on('keydown-R', () => this.onRetreat());
     keyboard?.on('keydown-ONE', () => this.selectTower('arrow'));
     keyboard?.on('keydown-TWO', () => this.selectTower('fire'));
     keyboard?.on('keydown-THREE', () => this.selectTower('water'));
@@ -409,6 +437,12 @@ export class BattleScene extends Phaser.Scene {
     const result = deployHero(this.state, heroUid);
     if (!result.ok) return this.showError(result.reason);
     this.setInfo('英雄が城から出撃しました。マップを右クリックすると、その場所へ移動します。');
+  }
+
+  private onRetreat(): void {
+    if (!this.isRunning()) return;
+    const result = retreatHero(this.state);
+    if (!result.ok) this.showError(result.reason);
   }
 
   private togglePause(): void {
@@ -490,6 +524,16 @@ export class BattleScene extends Phaser.Scene {
           this.showError(`${job.name}${hero.name}が倒れた…（${job.respawnTime}秒後に再び出撃できます。ほかの英雄に交代もできます）`);
           break;
         }
+        case 'heroRetreat': {
+          const hero = this.state.heroes.find((h) => h.uid === event.heroUid);
+          if (!hero) break;
+          this.addEffect('ring', toPixel(event.x), toPixel(event.y), 0, 0, TILE * 0.6, COLORS.ally, 0.4);
+          this.setInfo(`${HERO_JOBS[hero.job].name}${hero.name}が城へ撤退した。${RETREAT_TIME}秒休むとまた出撃できる。ほかの英雄はすぐ出撃できる。`);
+          break;
+        }
+        case 'heroHit':
+          this.addEffect('ring', toPixel(event.x), toPixel(event.y), 0, 0, TILE * 0.42, COLORS.enemy, 0.2);
+          break;
         case 'waveStart':
           this.banner(`敵襲！ ウェーブ ${event.wave} / ${this.state.stage.waves.length}`);
           break;
@@ -873,26 +917,32 @@ export class BattleScene extends Phaser.Scene {
       const hero = state.heroes.find((h) => h.uid === row.uid);
       if (!hero) continue;
       const job = HERO_JOBS[hero.job];
+      const active = hero.status === 'active';
       const canDeploy = this.isRunning() && hero.status === 'ready' && !someoneActive;
-      row.button.setEnabled(canDeploy || hero.status === 'active').setSelected(hero.status === 'active');
+      row.button.setEnabled(canDeploy || active).setSelected(active);
+      row.retreat.setVisible(active && this.isRunning());
+      row.deaths.setVisible(!active);
       setText(row.deaths, `倒れた ${hero.deaths}回`);
       let status: string;
-      if (hero.status === 'active') status = '出撃中（右クリックで移動）';
+      if (active) status = `出撃中（倒れた ${hero.deaths}回）`;
       else if (hero.status === 'down') status = `復活まで ${Math.ceil(hero.respawnLeft)}秒`;
-      else if (someoneActive) status = '待機中（交代は倒れたとき）';
+      else if (hero.status === 'resting') status = `休憩中（あと ${Math.ceil(hero.respawnLeft)}秒）`;
+      else if (someoneActive) status = '待機中（撤退させると交代できる）';
       else status = '待機中（クリックで出撃）';
       setText(row.status, status);
 
       const left = this.sidebarLeft;
-      this.drawHeroToken(g, hero, left + 20, row.y + 20, 15, hero.status !== 'down');
-      // 体力（倒れているときは復活までの進み具合）
+      const waiting = hero.status === 'down' || hero.status === 'resting';
+      this.drawHeroToken(g, hero, left + 20, row.y + 20, 15, !waiting);
+      // 体力（倒れているとき・休憩中は、再び出撃できるまでの進み具合）
       const barX = left + 42;
       const barWidth = this.sidebarInner - 48;
       g.fillStyle(COLORS.hpBack);
       g.fillRect(barX, row.y + 19, barWidth, 4);
-      if (hero.status === 'down') {
+      if (waiting) {
+        const total = hero.status === 'down' ? job.respawnTime : RETREAT_TIME;
         g.fillStyle(0x6b7080);
-        g.fillRect(barX, row.y + 19, barWidth * (1 - hero.respawnLeft / job.respawnTime), 4);
+        g.fillRect(barX, row.y + 19, barWidth * (1 - hero.respawnLeft / total), 4);
       } else {
         g.fillStyle(COLORS.allyHp);
         g.fillRect(barX, row.y + 19, barWidth * (hero.hp / hero.maxHp), 4);
@@ -915,7 +965,7 @@ export class BattleScene extends Phaser.Scene {
     } else if (this.state.phase === 'prep') {
       text = '土の道が敵の通るルート。道を変えられるのは地形カードだけ（全部使わなくてもOK）。タワーは道の横に建てよう。準備ができたら「戦闘開始」。';
     } else {
-      text = 'タワーは戦闘中も建てられる。英雄は右の一覧から1人ずつ出撃でき、倒れたらほかの英雄に交代できる。出撃中の英雄はマップを右クリックして動かそう。';
+      text = 'タワーは戦闘中も建てられる。英雄は右の一覧から1人ずつ出撃。撤退（Rキー）させるか倒れたら、ほかの英雄に交代できる。出撃中の英雄はマップを右クリックで動かそう。';
     }
     setText(this.messageText, text);
     if (this.messageText.style.color !== color) this.messageText.setColor(color);

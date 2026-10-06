@@ -28,6 +28,12 @@ export const FIXED_DT = 1 / 60;
 const ENGAGE_RADIUS = 0.6;
 /** 足止め中の敵と英雄がこの距離より離れると足止めが解ける（マス） */
 const RELEASE_RADIUS = 0.9;
+/** 足止めしない英雄（弓兵・魔法使い）は、この距離まで近づいた敵に通りすがりに攻撃される（マス） */
+const PASSING_ATTACK_RADIUS = 1.5;
+/** 英雄はこの秒数のあいだ攻撃を受けなければ、体力が回復し始める */
+const REGEN_DELAY = 2;
+/** 撤退した英雄が、もう一度出撃できるようになるまでの秒数 */
+export const RETREAT_TIME = 5;
 
 export type Phase = 'prep' | 'combat' | 'won' | 'lost';
 
@@ -64,7 +70,8 @@ export interface Enemy {
   dead: boolean;
 }
 
-export type HeroStatus = 'ready' | 'active' | 'down';
+/** ready：出撃できる／active：戦場にいる／down：倒れて復活待ち／resting：撤退して休憩中 */
+export type HeroStatus = 'ready' | 'active' | 'down' | 'resting';
 
 export interface Hero {
   uid: number;
@@ -80,6 +87,8 @@ export interface Hero {
   /** これから進むマスの列 */
   path: GridPoint[];
   attackCooldown: number;
+  /** 最後に攻撃を受けた時刻（回復を始めるかどうかの判断に使う） */
+  lastHitAt: number;
   deaths: number;
 }
 
@@ -101,6 +110,8 @@ export type BattleEvent =
   | { type: 'heroStrike'; job: HeroJobId; fromX: number; fromY: number; toX: number; toY: number }
   | { type: 'splash'; x: number; y: number; radius: number }
   | { type: 'heroDown'; heroUid: number; x: number; y: number }
+  | { type: 'heroRetreat'; heroUid: number; x: number; y: number }
+  | { type: 'heroHit'; heroUid: number; x: number; y: number }
   | { type: 'waveStart'; wave: number };
 
 interface SpawnEntry {
@@ -166,6 +177,7 @@ export function createBattle(stage: StageDef, seed: number, party: HeroJobId[] =
     respawnLeft: 0,
     path: [],
     attackCooldown: 0,
+    lastHitAt: -Infinity,
     deaths: 0,
   }));
   return {
@@ -277,14 +289,27 @@ export function deployHero(state: BattleState, heroUid: number): CommandResult {
   if (state.phase !== 'prep' && state.phase !== 'combat') return fail('いまは出撃できません');
   if (hero.status === 'active') return fail('すでに出撃しています');
   if (hero.status === 'down') return fail(`${hero.name}は復活まであと${Math.ceil(hero.respawnLeft)}秒です`);
+  if (hero.status === 'resting') return fail(`${hero.name}は休憩中です（あと${Math.ceil(hero.respawnLeft)}秒）`);
   const other = activeHero(state);
-  if (other) return fail(`同時に出撃できるのは1人です（${other.name}が倒れたら交代できます）`);
+  if (other) return fail(`同時に出撃できるのは1人です（${other.name}を撤退させるか、倒れたら交代できます）`);
   hero.status = 'active';
   hero.x = state.castle.x;
   hero.y = state.castle.y;
   hero.hp = hero.maxHp;
   hero.path = [];
   hero.attackCooldown = 0;
+  return OK;
+}
+
+/** 出撃中の英雄を城へ戻す。死亡にはならず、少し休んだらまた出撃できる */
+export function retreatHero(state: BattleState): CommandResult {
+  const hero = activeHero(state);
+  if (!hero) return fail('出撃中の英雄がいません');
+  hero.status = 'resting';
+  hero.respawnLeft = RETREAT_TIME;
+  hero.path = [];
+  for (const enemy of state.enemies) enemy.engaged = false;
+  state.events.push({ type: 'heroRetreat', heroUid: hero.uid, x: hero.x, y: hero.y });
   return OK;
 }
 
@@ -497,18 +522,35 @@ function updateEnemies(state: BattleState, dt: number): void {
       enemy.attackCooldown -= dt;
       if (enemy.attackCooldown <= 0) {
         enemy.attackCooldown += def.attackInterval;
-        hero.hp -= def.attackDamage;
-        if (hero.hp <= 0) {
-          heroDown(state, hero, enemy.type);
-          engagedCount = 0;
-        }
+        if (hitHero(state, hero, enemy)) engagedCount = 0;
       }
       continue;
+    }
+
+    // 足止めしない英雄には、近くを通りながら攻撃する（歩くのはやめない）
+    if (hero && hero.status === 'active' && blockCount === 0 && !def.flying && distance(hero, enemy) <= PASSING_ATTACK_RADIUS) {
+      enemy.attackCooldown -= dt;
+      if (enemy.attackCooldown <= 0) {
+        enemy.attackCooldown += def.attackInterval;
+        hitHero(state, hero, enemy);
+      }
+    } else {
+      enemy.attackCooldown = def.attackInterval / 2;
     }
 
     moveEnemy(state, enemy, dt);
     if (state.phase !== 'combat') return;
   }
+}
+
+/** 敵が英雄を1回攻撃する。英雄が倒れたら true */
+function hitHero(state: BattleState, hero: Hero, enemy: Enemy): boolean {
+  hero.hp -= ENEMIES[enemy.type].attackDamage;
+  hero.lastHitAt = state.time;
+  state.events.push({ type: 'heroHit', heroUid: hero.uid, x: hero.x, y: hero.y });
+  if (hero.hp > 0) return false;
+  heroDown(state, hero, enemy.type);
+  return true;
 }
 
 function moveEnemy(state: BattleState, enemy: Enemy, dt: number): void {
@@ -607,7 +649,7 @@ function damageEnemy(state: BattleState, enemy: Enemy, amount: number): void {
 
 function updateHeroTimers(state: BattleState, dt: number): void {
   for (const hero of state.heroes) {
-    if (hero.status !== 'down') continue;
+    if (hero.status !== 'down' && hero.status !== 'resting') continue;
     hero.respawnLeft -= dt;
     if (hero.respawnLeft <= 0) {
       hero.respawnLeft = 0;
@@ -649,7 +691,9 @@ function updateHeroAttack(state: BattleState, dt: number): void {
   const job = HERO_JOBS[hero.job];
   const engaged = state.enemies.filter((e) => e.engaged && !e.dead);
 
-  if (engaged.length === 0) hero.hp = Math.min(hero.maxHp, hero.hp + job.regenPerSecond * dt);
+  if (engaged.length === 0 && state.time - hero.lastHitAt >= REGEN_DELAY) {
+    hero.hp = Math.min(hero.maxHp, hero.hp + job.regenPerSecond * dt);
+  }
 
   hero.attackCooldown -= dt;
   if (hero.attackCooldown > 0) return;

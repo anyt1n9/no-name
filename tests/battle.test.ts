@@ -7,6 +7,8 @@ import {
   FIXED_DT,
   placeTerrain,
   placeTower,
+  retreatHero,
+  RETREAT_TIME,
   startCombat,
   step,
   type BattleState,
@@ -272,6 +274,41 @@ describe('戦闘', () => {
     expect(runUntil(state, () => state.kills > 0)).toBe(true);
     expect(state.enemies.some((e) => e.engaged)).toBe(false);
     expect(archer.hp).toBe(archer.maxHp);
+  });
+
+  it('弓兵は、すぐ近くを通る敵に攻撃される（敵は立ち止まらない）', () => {
+    const state = emptyBattle();
+    startCombat(state);
+    const archer = heroOf(state, 'archer');
+    deployHero(state, archer.uid);
+    const spot = enemyRoute(state)[6];
+    archer.x = spot.x;
+    archer.y = spot.y - 1;
+    expect(runUntil(state, () => archer.hp < archer.maxHp, 30)).toBe(true);
+    expect(state.enemies.some((e) => e.engaged)).toBe(false);
+    const enemy = state.enemies[0];
+    const before = { x: enemy.x, y: enemy.y };
+    for (let i = 0; i < 0.3 / FIXED_DT; i++) step(state);
+    expect({ x: enemy.x, y: enemy.y }).not.toEqual(before);
+  });
+
+  it('撤退すると死亡にはならず、休んだあと再び出撃できる。その間はほかの英雄を出せる', () => {
+    const state = emptyBattle();
+    const swordsman = heroOf(state, 'swordsman');
+    const mage = heroOf(state, 'mage');
+    expect(retreatHero(state).ok).toBe(false);
+    deployHero(state, swordsman.uid);
+    swordsman.hp = 50;
+    expect(retreatHero(state).ok).toBe(true);
+    expect(swordsman.status).toBe('resting');
+    expect(swordsman.deaths).toBe(0);
+    expect(state.deathLog).toHaveLength(0);
+    expect(deployHero(state, swordsman.uid).ok).toBe(false);
+    expect(deployHero(state, mage.uid).ok).toBe(true);
+    expect(retreatHero(state).ok).toBe(true);
+    expect(runUntil(state, () => swordsman.status === 'ready', RETREAT_TIME + 1)).toBe(true);
+    expect(swordsman.hp).toBe(swordsman.maxHp);
+    expect(deployHero(state, swordsman.uid).ok).toBe(true);
   });
 
   it('魔法使いは範囲攻撃で、固まった敵をまとめて攻撃する', () => {
