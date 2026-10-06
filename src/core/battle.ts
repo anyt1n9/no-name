@@ -235,7 +235,11 @@ export function checkTowerPlacement(state: BattleState, towerId: TowerId, x: num
   if (state.gold < TOWERS[towerId].cost) return fail('お金が足りません');
   const hero = state.hero;
   if (hero.status === 'active' && samePoint(tileOf(hero), { x, y })) return fail('英雄がいる場所には建てられません');
-  // 通れるマスに建てると道を塞ぐことになるので、道が残るか確かめる
+  // 敵のルートを変えられるのは地形カードだけにするため、ルートの上には建てさせない
+  if (enemyRoute(state).some((p) => p.x === x && p.y === y)) {
+    return fail('敵の通り道には建てられません（道は地形カードで変えられます）');
+  }
+  // 念のため、敵がたどり着けなくならないかも確かめる
   if (terrain.groundPassable) {
     const blocked = checkStillReachable(state, x, y);
     if (!blocked.ok) return blocked;

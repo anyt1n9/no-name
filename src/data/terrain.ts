@@ -1,9 +1,9 @@
 // 地形の定義。数値はすべて仮で、遊びながら調整する。
 
-export type TerrainId = 'plain' | 'mountain' | 'forest';
+export type TerrainId = 'plain' | 'mountain' | 'forest' | 'lake';
 
-/** 地形カードとして手札に来る地形（草原は「何もない」状態なので含まない） */
-export type TerrainCardId = Exclude<TerrainId, 'plain'>;
+/** 地形カードとして手札に来る地形（湖はマップにだけ出てくる） */
+export type TerrainCardId = 'mountain' | 'forest';
 
 export interface TerrainDef {
   id: TerrainId;
@@ -51,5 +51,15 @@ export const TERRAIN: Record<TerrainId, TerrainDef> = {
     buildable: false,
     towerRangeBonus: 0,
     description: '敵の動きが半分になる。隣の弓塔は攻撃が速くなる。タワーは建てられない。',
+  },
+  lake: {
+    id: 'lake',
+    name: '湖',
+    icon: '湖',
+    groundPassable: false,
+    speedMultiplier: 1,
+    buildable: false,
+    towerRangeBonus: 0,
+    description: '地上の敵は通れない。タワーも建てられない。マップにだけ出てくる地形。',
   },
 };

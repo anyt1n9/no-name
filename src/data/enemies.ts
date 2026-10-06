@@ -39,7 +39,7 @@ export const ENEMIES: Record<EnemyId, EnemyDef> = {
     attackInterval: 1,
     flying: false,
     radius: 0.28,
-    color: 0x6fae4a,
+    color: 0xd2763e,
     description: 'ふつうの魔物。',
   },
   wolf: {
@@ -55,7 +55,7 @@ export const ENEMIES: Record<EnemyId, EnemyDef> = {
     attackInterval: 0.8,
     flying: false,
     radius: 0.26,
-    color: 0x8a6fbf,
+    color: 0xa8405e,
     description: '足が速いが体力は低い。',
   },
 };

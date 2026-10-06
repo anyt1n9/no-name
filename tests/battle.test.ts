@@ -34,6 +34,19 @@ function runUntil(state: BattleState, condition: () => boolean, maxSeconds = 120
   return condition();
 }
 
+/** 敵の通り道から外れた、タワーを建てられる草原のマス */
+function offRouteTile(state: BattleState): { x: number; y: number } {
+  const route = enemyRoute(state);
+  for (let y = 0; y < state.grid.height; y++) {
+    for (let x = 0; x < state.grid.width; x++) {
+      const onRoute = route.some((p) => p.x === x && p.y === y);
+      const reserved = (x === state.entrance.x && y === state.entrance.y) || (x === state.castle.x && y === state.castle.y);
+      if (!onRoute && !reserved && tileAt(state.grid, x, y).terrain === 'plain') return { x, y };
+    }
+  }
+  throw new Error('空いているマスがありません');
+}
+
 /** x 列を、y = gapY の1マスだけ残して山で埋める */
 function buildWallWithGap(state: BattleState, x: number, gapY: number): void {
   for (let y = 0; y < state.grid.height; y++) {
@@ -57,6 +70,26 @@ describe('マップと準備フェーズ', () => {
     for (let seed = 1; seed <= 30; seed++) {
       expect(enemyRoute(createBattle(FIRST_STAGE, seed)).length).toBeGreaterThan(0);
     }
+  });
+
+  it('入口と城のまわりは空いている', () => {
+    for (let seed = 1; seed <= 30; seed++) {
+      const state = createBattle(FIRST_STAGE, seed);
+      for (const point of [state.entrance, state.castle]) {
+        expect(tileAt(state.grid, point.x, point.y).terrain).toBe('plain');
+      }
+    }
+  });
+
+  it('マップには山脈などの地形があり、シード値ごとに形が変わる', () => {
+    const shapes = new Set<string>();
+    for (let seed = 1; seed <= 10; seed++) {
+      const state = createBattle(FIRST_STAGE, seed);
+      const blocked = state.grid.tiles.filter((t) => t.terrain === 'mountain' || t.terrain === 'lake').length;
+      expect(blocked).toBeGreaterThanOrEqual(6);
+      shapes.add(state.grid.tiles.map((t) => t.terrain[0]).join(''));
+    }
+    expect(shapes.size).toBe(10);
   });
 
   it('道を完全に塞ぐ山は置けない', () => {
@@ -99,7 +132,8 @@ describe('タワー', () => {
   it('建てるとお金が減る', () => {
     const state = emptyBattle();
     const gold = state.gold;
-    expect(placeTower(state, 'arrow', 5, 0).ok).toBe(true);
+    const spot = offRouteTile(state);
+    expect(placeTower(state, 'arrow', spot.x, spot.y).ok).toBe(true);
     expect(state.gold).toBe(gold - TOWERS.arrow.cost);
   });
 
@@ -119,6 +153,27 @@ describe('タワー', () => {
     const state = emptyBattle();
     buildWallWithGap(state, 7, 0);
     expect(placeTower(state, 'arrow', 7, 0).ok).toBe(false);
+  });
+
+  it('敵の通り道にはタワーを建てられない', () => {
+    const state = emptyBattle();
+    const onRoute = enemyRoute(state)[4];
+    const result = placeTower(state, 'arrow', onRoute.x, onRoute.y);
+    expect(result.ok).toBe(false);
+    expect(tileAt(state.grid, onRoute.x, onRoute.y).towerUid).toBeNull();
+  });
+
+  it('タワーを建てても敵のルートは変わらない（道を変えられるのは地形カードだけ）', () => {
+    const state = createBattle(FIRST_STAGE, 11);
+    const before = enemyRoute(state);
+    let built = 0;
+    for (let y = 0; y < state.grid.height && built < 3; y++) {
+      for (let x = 0; x < state.grid.width && built < 3; x++) {
+        if (placeTower(state, 'arrow', x, y).ok) built++;
+      }
+    }
+    expect(built).toBe(3);
+    expect(enemyRoute(state)).toEqual(before);
   });
 
   it('敵を倒すとお金が増える', () => {

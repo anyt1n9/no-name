@@ -74,6 +74,13 @@ function randomSeed(): number {
   return Math.floor(Math.random() * 1_000_000);
 }
 
+/** 見た目だけに使う、マスごとに決まった値（ゲームのルールには影響しない） */
+function tileHash(seed: number, x: number, y: number, salt: number): number {
+  let h = (seed ^ Math.imul(x + 1, 374761393) ^ Math.imul(y + 1, 668265263) ^ Math.imul(salt, 0x7feb352d)) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
 export class BattleScene extends Phaser.Scene {
   private state!: BattleState;
   private accumulator = 0;
@@ -97,6 +104,9 @@ export class BattleScene extends Phaser.Scene {
   private sidebarGfx!: Phaser.GameObjects.Graphics;
   private terrainLabels: Phaser.GameObjects.Text[] = [];
   private towerLabels = new Map<number, Phaser.GameObjects.Text>();
+  private enemyLabels = new Map<number, Phaser.GameObjects.Text>();
+  /** 地形を描き直すかどうかを決めるための、前回描いたルート */
+  private drawnRouteKey = '';
   private heroLabel!: Phaser.GameObjects.Text;
   private pauseLabel!: Phaser.GameObjects.Text;
 
@@ -136,6 +146,8 @@ export class BattleScene extends Phaser.Scene {
     this.infoMessage = '';
     this.terrainLabels = [];
     this.towerLabels = new Map();
+    this.enemyLabels = new Map();
+    this.drawnRouteKey = '';
     this.cardButtons = [];
     this.towerButtons = new Map();
   }
@@ -191,11 +203,14 @@ export class BattleScene extends Phaser.Scene {
     this.castleFlash = Math.max(0, this.castleFlash - realDt);
     this.errorTimer = Math.max(0, this.errorTimer - realDt);
 
-    if (this.mapDirty) {
-      this.drawTerrain();
+    const route = enemyRoute(this.state);
+    const routeKey = route.map((p) => `${p.x},${p.y}`).join(' ');
+    if (this.mapDirty || routeKey !== this.drawnRouteKey) {
+      this.drawTerrain(route);
+      this.drawnRouteKey = routeKey;
       this.mapDirty = false;
     }
-    this.drawRoute();
+    this.drawRouteArrows(route);
     this.drawHover();
     this.drawEntities();
     this.drawEffects();
@@ -220,7 +235,7 @@ export class BattleScene extends Phaser.Scene {
     this.sidebarInner = width;
 
     this.add.text(left, 10, 'ソウルパス（仮）', textStyle(18, TEXT_COLORS.main, true));
-    this.add.text(left, 34, `シード ${this.state.seed}　v0.1`, textStyle(11, TEXT_COLORS.sub));
+    this.add.text(left, 34, `シード ${this.state.seed}　v0.1.1`, textStyle(11, TEXT_COLORS.sub));
     this.phaseText = this.add.text(left, 54, '', textStyle(15, TEXT_COLORS.accent, true));
     this.statusText = this.add.text(left, 76, '', textStyle(14));
     this.waveText = this.add.text(left, 98, '', textStyle(12, TEXT_COLORS.sub));
@@ -291,11 +306,25 @@ export class BattleScene extends Phaser.Scene {
         this.setInfo(`${job.name}：${job.description}倒れても${job.respawnTime}秒後に再び出撃できる。出撃後は右クリックで移動。`),
     });
 
+    // 味方と敵の見分け方
+    this.add.text(left, 446, '見分け方', textStyle(12, TEXT_COLORS.sub));
+    const legend = this.add.graphics().setDepth(1);
+    legend.fillStyle(COLORS.ally);
+    legend.fillCircle(left + 7, 476, 6);
+    legend.lineStyle(2, COLORS.heroOutline, 1);
+    legend.strokeCircle(left + 7, 476, 6);
+    this.add.text(left + 20, 468, '味方は青（英雄・タワー・城）', textStyle(12, TEXT_COLORS.ally));
+    legend.fillStyle(ENEMIES.goblin.color);
+    legend.fillCircle(left + 7, 496, 6);
+    legend.lineStyle(2, COLORS.enemy, 1);
+    legend.strokeCircle(left + 7, 496, 6);
+    this.add.text(left + 20, 488, '敵は赤（入口から攻めてくる）', textStyle(12, TEXT_COLORS.enemy));
+
     this.add.text(
       left,
-      452,
-      ['操作', '左クリック：置く・建てる', '右クリック：英雄を移動', 'Esc：選択をやめる', 'Space：一時停止'].join('\n'),
-      { ...textStyle(11, TEXT_COLORS.sub), lineSpacing: 4 },
+      512,
+      ['左クリック：置く・建てる', '右クリック：英雄を移動', 'Esc：選択をやめる', 'Space：一時停止'].join('\n'),
+      { ...textStyle(11, TEXT_COLORS.sub), lineSpacing: 3 },
     );
   }
 
@@ -449,7 +478,7 @@ export class BattleScene extends Phaser.Scene {
           break;
         }
         case 'waveStart':
-          this.banner(`ウェーブ ${event.wave} / ${this.state.stage.waves.length}`);
+          this.banner(`敵襲！ ウェーブ ${event.wave} / ${this.state.stage.waves.length}`);
           break;
       }
     }
@@ -466,7 +495,7 @@ export class BattleScene extends Phaser.Scene {
 
   private banner(text: string): void {
     const label = this.add
-      .text(MAP_WIDTH / 2, MAP_HEIGHT / 2 - 40, text, { ...textStyle(28, '#ffffff', true), stroke: '#000000', strokeThickness: 5 })
+      .text(MAP_WIDTH / 2, MAP_HEIGHT / 2 - 40, text, { ...textStyle(28, TEXT_COLORS.enemy, true), stroke: '#000000', strokeThickness: 5 })
       .setOrigin(0.5)
       .setDepth(7);
     this.tweens.add({ targets: label, alpha: 0, delay: 900, duration: 500, onComplete: () => label.destroy() });
@@ -476,41 +505,86 @@ export class BattleScene extends Phaser.Scene {
   // 描画
   // -------------------------------------------------------------------------
 
-  private drawTerrain(): void {
+  private drawTerrain(route: GridPoint[]): void {
     const g = this.terrainGfx;
     g.clear();
     for (const label of this.terrainLabels) label.destroy();
     this.terrainLabels = [];
-    const { grid, entrance, castle } = this.state;
+    const { grid, entrance, castle, seed } = this.state;
 
     for (let y = 0; y < grid.height; y++) {
       for (let x = 0; x < grid.width; x++) {
         const left = x * TILE;
         const top = y * TILE;
         const terrain = tileAt(grid, x, y).terrain;
-        g.fillStyle((x + y) % 2 === 0 ? COLORS.plain : COLORS.plainAlt);
+        g.fillStyle(COLORS.plainShades[tileHash(seed, x, y, 1) % COLORS.plainShades.length]);
         g.fillRect(left, top, TILE, TILE);
+        if (terrain === 'plain') this.drawGrassDetail(g, left, top, tileHash(seed, x, y, 2));
         if (terrain === 'mountain') this.drawMountain(g, left, top);
         if (terrain === 'forest') this.drawForest(g, left, top);
+        if (terrain === 'lake') this.drawLake(g, left, top, tileHash(seed, x, y, 3));
         if (terrain !== 'plain') this.addTerrainLabel(left + 3, top + 1, TERRAIN[terrain].icon, 11);
       }
     }
 
-    g.lineStyle(1, COLORS.gridLine, 0.15);
+    // 敵の通る道を、土の道として描く
+    this.strokeThickRoute(g, route, COLORS.roadEdge, TILE * 0.5);
+    this.strokeThickRoute(g, route, COLORS.road, TILE * 0.36);
+
+    g.lineStyle(1, COLORS.gridLine, 0.1);
     for (let x = 0; x <= grid.width; x++) g.lineBetween(x * TILE, 0, x * TILE, MAP_HEIGHT);
     for (let y = 0; y <= grid.height; y++) g.lineBetween(0, y * TILE, MAP_WIDTH, y * TILE);
 
+    // 敵の入口は赤
     g.fillStyle(COLORS.entrance);
     g.fillRect(entrance.x * TILE + 2, entrance.y * TILE + 2, TILE - 4, TILE - 4);
+    g.lineStyle(2, COLORS.enemy, 1);
+    g.strokeRect(entrance.x * TILE + 2, entrance.y * TILE + 2, TILE - 4, TILE - 4);
     this.addTerrainLabel(toPixel(entrance.x), toPixel(entrance.y), '入口', 13, true);
 
+    // 味方の城は青
     const castleLeft = castle.x * TILE;
     const castleTop = castle.y * TILE;
+    g.fillStyle(COLORS.allyDark);
+    g.fillRect(castleLeft + 2, castleTop + 2, TILE - 4, TILE - 4);
     g.fillStyle(COLORS.castle);
-    g.fillRect(castleLeft + 4, castleTop + 12, TILE - 8, TILE - 16);
+    g.fillRect(castleLeft + 6, castleTop + 14, TILE - 12, TILE - 20);
     g.fillStyle(COLORS.castleTop);
-    for (let i = 0; i < 3; i++) g.fillRect(castleLeft + 4 + i * 15, castleTop + 5, 10, 9);
-    this.addTerrainLabel(toPixel(castle.x), toPixel(castle.y) + 4, '城', 16, true);
+    for (let i = 0; i < 3; i++) g.fillRect(castleLeft + 6 + i * 13, castleTop + 7, 10, 9);
+    g.lineStyle(2, COLORS.ally, 1);
+    g.strokeRect(castleLeft + 2, castleTop + 2, TILE - 4, TILE - 4);
+    this.addTerrainLabel(toPixel(castle.x), toPixel(castle.y) + 5, '城', 16, true);
+  }
+
+  /** 草原の飾り（花・草むら・小石）。見た目だけで、ルールには関係ない */
+  private drawGrassDetail(g: Phaser.GameObjects.Graphics, left: number, top: number, hash: number): void {
+    const roll = hash % 100;
+    const x = left + 10 + ((hash >>> 8) % 26);
+    const y = top + 12 + ((hash >>> 16) % 24);
+    if (roll < 9) {
+      g.fillStyle(COLORS.flower, 0.85);
+      g.fillCircle(x, y, 2);
+      g.fillCircle(x + 6, y + 3, 2);
+      g.fillCircle(x + 2, y + 7, 1.5);
+    } else if (roll < 26) {
+      g.lineStyle(2, COLORS.grassTuft, 0.9);
+      g.lineBetween(x, y + 6, x - 3, y);
+      g.lineBetween(x, y + 6, x, y - 1);
+      g.lineBetween(x, y + 6, x + 3, y);
+    } else if (roll < 32) {
+      g.fillStyle(COLORS.pebble, 0.9);
+      g.fillCircle(x, y, 3);
+      g.fillCircle(x + 5, y + 2, 2);
+    }
+  }
+
+  private drawLake(g: Phaser.GameObjects.Graphics, left: number, top: number, hash: number): void {
+    g.fillStyle(COLORS.lake);
+    g.fillRect(left, top, TILE, TILE);
+    g.lineStyle(2, COLORS.lakeRipple, 0.7);
+    const y = top + 14 + (hash % 8);
+    g.lineBetween(left + 10, y, left + 22, y);
+    g.lineBetween(left + 24, y + 12, left + 38, y + 12);
   }
 
   private addTerrainLabel(x: number, y: number, text: string, size: number, centered = false): void {
@@ -541,11 +615,35 @@ export class BattleScene extends Phaser.Scene {
     g.fillCircle(left + 23, top + 17, 10);
   }
 
-  private drawRoute(): void {
+  /** 道の上に、敵の進む向きを示す矢印を描く */
+  private drawRouteArrows(route: GridPoint[]): void {
     const g = this.routeGfx;
     g.clear();
     const prep = this.state.phase === 'prep';
-    this.strokeRoute(g, enemyRoute(this.state), COLORS.route, prep ? 0.6 : 0.22, prep ? 4 : 3);
+    g.lineStyle(2, COLORS.route, prep ? 0.95 : 0.35);
+    for (let i = 1; i < route.length - 1; i++) {
+      const dx = route[i + 1].x - route[i].x;
+      const dy = route[i + 1].y - route[i].y;
+      const cx = toPixel(route[i].x);
+      const cy = toPixel(route[i].y);
+      const tipX = cx + dx * 6;
+      const tipY = cy + dy * 6;
+      const backX = cx - dx * 4;
+      const backY = cy - dy * 4;
+      g.lineBetween(backX - dy * 6, backY + dx * 6, tipX, tipY);
+      g.lineBetween(backX + dy * 6, backY - dx * 6, tipX, tipY);
+    }
+  }
+
+  /** マスの列を太い線でつなぐ（角は丸める） */
+  private strokeThickRoute(g: Phaser.GameObjects.Graphics, route: GridPoint[], color: number, width: number): void {
+    if (route.length < 2) return;
+    g.lineStyle(width, color, 1);
+    for (let i = 1; i < route.length; i++) {
+      g.lineBetween(toPixel(route[i - 1].x), toPixel(route[i - 1].y), toPixel(route[i].x), toPixel(route[i].y));
+    }
+    g.fillStyle(color, 1);
+    for (const p of route) g.fillCircle(toPixel(p.x), toPixel(p.y), width / 2);
   }
 
   private strokeRoute(g: Phaser.GameObjects.Graphics, route: GridPoint[], color: number, alpha: number, width: number): void {
@@ -587,9 +685,6 @@ export class BattleScene extends Phaser.Scene {
       g.fillRect(left, top, TILE, TILE);
       g.lineStyle(2, color, 0.8);
       g.strokeCircle(cx, cy, towerRange(this.state, { type: selection.id, x: tile.x, y: tile.y }) * TILE);
-      if (result.ok && TERRAIN[tileAt(this.state.grid, tile.x, tile.y).terrain].groundPassable) {
-        this.strokeRoute(g, previewRoute(this.state, tile.x, tile.y, { tower: true }), COLORS.routePreview, 0.9, 2);
-      }
       return;
     }
 
@@ -615,10 +710,13 @@ export class BattleScene extends Phaser.Scene {
       const def = TOWERS[tower.type];
       const left = tower.x * TILE;
       const top = tower.y * TILE;
-      g.fillStyle(0x23242b);
-      g.fillRect(left + 5, top + 5, TILE - 10, TILE - 10);
+      // 味方なので青い台座と青い縁。中の色はタワーの種類
+      g.fillStyle(COLORS.allyDark);
+      g.fillRect(left + 4, top + 4, TILE - 8, TILE - 8);
+      g.lineStyle(2, COLORS.ally, 1);
+      g.strokeRect(left + 4, top + 4, TILE - 8, TILE - 8);
       g.fillStyle(def.color);
-      g.fillRect(left + 8, top + 8, TILE - 16, TILE - 16);
+      g.fillRect(left + 10, top + 10, TILE - 20, TILE - 20);
       seenTowers.add(tower.uid);
       if (!this.towerLabels.has(tower.uid)) {
         const label = this.add
@@ -635,14 +733,16 @@ export class BattleScene extends Phaser.Scene {
       }
     }
 
+    const seenEnemies = new Set<number>();
     for (const enemy of state.enemies) {
       if (enemy.dead) continue;
       const def = ENEMIES[enemy.type];
       const cx = toPixel(enemy.x);
       const cy = toPixel(enemy.y);
       const r = def.radius * TILE;
+      // 敵なので赤い縁
       g.fillStyle(def.color);
-      g.lineStyle(2, 0x111111, 0.9);
+      g.lineStyle(3, COLORS.enemy, 1);
       if (def.shape === 'circle') {
         g.fillCircle(cx, cy, r);
         g.strokeCircle(cx, cy, r);
@@ -660,36 +760,53 @@ export class BattleScene extends Phaser.Scene {
         g.lineStyle(2, COLORS.slowRing, 0.9);
         g.strokeCircle(cx, cy, r + 4);
       }
-      if (enemy.hp < enemy.maxHp) this.drawBar(g, cx, cy - r - 8, TILE * 0.6, enemy.hp / enemy.maxHp);
+      if (enemy.hp < enemy.maxHp) this.drawBar(g, cx, cy - r - 9, TILE * 0.6, enemy.hp / enemy.maxHp, COLORS.enemyHp);
+      seenEnemies.add(enemy.uid);
+      let label = this.enemyLabels.get(enemy.uid);
+      if (!label) {
+        label = this.add
+          .text(cx, cy, def.icon, { ...textStyle(11, '#ffffff', true), stroke: '#000000', strokeThickness: 3 })
+          .setOrigin(0.5)
+          .setDepth(5);
+        this.enemyLabels.set(enemy.uid, label);
+      }
+      label.setPosition(cx, cy);
+    }
+    for (const [uid, label] of this.enemyLabels) {
+      if (!seenEnemies.has(uid)) {
+        label.destroy();
+        this.enemyLabels.delete(uid);
+      }
     }
 
     const hero = state.hero;
     if (hero.status === 'active') {
-      const job = HERO_JOBS[hero.job];
       const cx = toPixel(hero.x);
       const cy = toPixel(hero.y);
       const destination = hero.path[hero.path.length - 1];
       if (destination) {
-        g.lineStyle(2, job.color, 0.9);
+        g.lineStyle(2, COLORS.ally, 0.9);
         g.strokeCircle(toPixel(destination.x), toPixel(destination.y), 8);
         g.lineBetween(cx, cy, toPixel(destination.x), toPixel(destination.y));
       }
-      g.fillStyle(job.color);
+      // 味方なので青い体に白い縁
+      g.fillStyle(COLORS.ally);
       g.fillCircle(cx, cy, TILE * 0.34);
-      g.lineStyle(2, COLORS.heroOutline, 1);
+      g.lineStyle(3, COLORS.heroOutline, 1);
       g.strokeCircle(cx, cy, TILE * 0.34);
-      this.drawBar(g, cx, cy - TILE * 0.34 - 8, TILE * 0.7, hero.hp / hero.maxHp);
+      this.drawBar(g, cx, cy - TILE * 0.34 - 9, TILE * 0.7, hero.hp / hero.maxHp, COLORS.allyHp);
       this.heroLabel.setPosition(cx, cy).setVisible(true);
     } else {
       this.heroLabel.setVisible(false);
     }
   }
 
-  private drawBar(g: Phaser.GameObjects.Graphics, cx: number, y: number, width: number, ratio: number): void {
+  /** 体力のバー。味方は青、敵は赤 */
+  private drawBar(g: Phaser.GameObjects.Graphics, cx: number, y: number, width: number, ratio: number, color: number): void {
     const clamped = Math.max(0, Math.min(1, ratio));
     g.fillStyle(COLORS.hpBack);
-    g.fillRect(cx - width / 2, y, width, 5);
-    g.fillStyle(clamped < 0.35 ? COLORS.hpLow : COLORS.hpFill);
+    g.fillRect(cx - width / 2 - 1, y - 1, width + 2, 7);
+    g.fillStyle(color);
     g.fillRect(cx - width / 2, y, width * clamped, 5);
   }
 
@@ -778,9 +895,8 @@ export class BattleScene extends Phaser.Scene {
       g.fillStyle(0x6b7080);
       g.fillRect(this.sidebarLeft, barY, this.sidebarInner * (1 - hero.respawnLeft / job.respawnTime), 8);
     } else {
-      const ratio = hero.hp / hero.maxHp;
-      g.fillStyle(ratio < 0.35 ? COLORS.hpLow : COLORS.hpFill);
-      g.fillRect(this.sidebarLeft, barY, this.sidebarInner * ratio, 8);
+      g.fillStyle(COLORS.allyHp);
+      g.fillRect(this.sidebarLeft, barY, this.sidebarInner * (hero.hp / hero.maxHp), 8);
     }
   }
 
@@ -797,7 +913,7 @@ export class BattleScene extends Phaser.Scene {
     } else if (this.infoMessage) {
       text = this.infoMessage;
     } else if (this.state.phase === 'prep') {
-      text = '地形カードで敵の道を作り、タワーを建てて守りを固めよう。黄色い線が敵の通るルート。準備ができたら「戦闘開始」。';
+      text = '土の道が敵の通るルート。道を変えられるのは地形カードだけ（全部使わなくてもOK）。タワーは道の横に建てよう。準備ができたら「戦闘開始」。';
     } else {
       text = 'タワーは戦闘中も建てられる。英雄を出撃させたら、マップを右クリックして敵の前に立たせよう。';
     }

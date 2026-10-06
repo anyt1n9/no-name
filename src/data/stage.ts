@@ -18,6 +18,18 @@ export interface WaveDef {
   hpMultiplier: number;
 }
 
+/** マップの地形の作り方。[最小, 最大] の範囲でランダムに決まる */
+export interface MapStyle {
+  /** 山脈（すき間のある山の列）の数 */
+  ridges: [number, number];
+  /** 湖の数 */
+  lakes: [number, number];
+  /** 森のかたまりの数 */
+  groves: [number, number];
+  /** ぽつんと立つ岩山の数 */
+  rocks: [number, number];
+}
+
 export interface StageDef {
   name: string;
   width: number;
@@ -27,8 +39,8 @@ export interface StageDef {
   /** 準備フェーズで引く地形カードの枚数 */
   handSize: number;
   starterDeck: TerrainCardId[];
-  /** 最初からマップに置かれている地形の数 */
-  preplaced: Record<TerrainCardId, number>;
+  /** 最初からマップにある地形の作り方 */
+  map: MapStyle;
   waves: WaveDef[];
   /** 敵が残っていても、最後の出現からこの秒数で次のウェーブが来る */
   waveGapMax: number;
@@ -44,26 +56,26 @@ export const FIRST_STAGE: StageDef = {
   castleHp: 20,
   handSize: 5,
   starterDeck: ['mountain', 'mountain', 'mountain', 'mountain', 'mountain', 'mountain', 'forest', 'forest', 'forest', 'forest'],
-  preplaced: { mountain: 10, forest: 6 },
+  map: { ridges: [1, 2], lakes: [0, 1], groves: [2, 3], rocks: [2, 4] },
   waves: [
-    { hpMultiplier: 1.6, groups: [{ enemy: 'goblin', count: 6, interval: 1.4, delay: 0 }] },
+    { hpMultiplier: 1.85, groups: [{ enemy: 'goblin', count: 6, interval: 1.4, delay: 0 }] },
     {
-      hpMultiplier: 1.75,
+      hpMultiplier: 2,
       groups: [
         { enemy: 'goblin', count: 8, interval: 1.1, delay: 0 },
         { enemy: 'wolf', count: 4, interval: 1, delay: 4 },
       ],
     },
-    { hpMultiplier: 1.9, groups: [{ enemy: 'wolf', count: 12, interval: 0.7, delay: 0 }] },
+    { hpMultiplier: 2.2, groups: [{ enemy: 'wolf', count: 12, interval: 0.7, delay: 0 }] },
     {
-      hpMultiplier: 2.15,
+      hpMultiplier: 2.45,
       groups: [
         { enemy: 'goblin', count: 14, interval: 0.8, delay: 0 },
         { enemy: 'wolf', count: 8, interval: 0.9, delay: 3 },
       ],
     },
     {
-      hpMultiplier: 2.4,
+      hpMultiplier: 2.75,
       groups: [
         { enemy: 'goblin', count: 18, interval: 0.6, delay: 0 },
         { enemy: 'wolf', count: 14, interval: 0.6, delay: 2 },

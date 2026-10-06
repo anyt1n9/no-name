@@ -14,7 +14,14 @@ export const GAME_HEIGHT = MAP_HEIGHT + BOTTOM_HEIGHT;
 export const FONT =
   '"Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", "Noto Sans JP", "Noto Sans CJK JP", sans-serif';
 
+// 色の決まり：味方（英雄・タワー・城）は青、敵（魔物・入口）は赤。地形は緑・灰・水色の落ち着いた色にする
 export const COLORS = {
+  ally: 0x3d8bff,
+  allyDark: 0x173a75,
+  allyHp: 0x58c4ff,
+  enemy: 0xff4a3a,
+  enemyDark: 0x5a0f0b,
+  enemyHp: 0xff6150,
   background: 0x14161c,
   panel: 0x1c1f27,
   panelBorder: 0x343846,
@@ -23,8 +30,10 @@ export const COLORS = {
   buttonSelected: 0x7a5d1e,
   buttonDisabled: 0x22252e,
   buttonBorder: 0x4a5062,
-  plain: 0x3d5c36,
-  plainAlt: 0x395633,
+  plainShades: [0x3d5c36, 0x395633, 0x42623a],
+  grassTuft: 0x2c4627,
+  flower: 0xf3e6a0,
+  pebble: 0x8d8a7c,
   gridLine: 0x000000,
   mountainBase: 0x4f5058,
   mountain: 0x8a8b96,
@@ -32,16 +41,18 @@ export const COLORS = {
   forestBase: 0x2b4627,
   forestTree: 0x2f8a45,
   forestTreeDark: 0x24703a,
-  entrance: 0x6e2a2a,
-  castle: 0x7d6b48,
-  castleTop: 0xa89060,
+  lake: 0x285f6b,
+  lakeRipple: 0x4b97a3,
+  entrance: 0x7a1f1a,
+  castle: 0x4a6fa8,
+  castleTop: 0x8fb3e8,
+  road: 0x8f6e42,
+  roadEdge: 0x5e4528,
   route: 0xf0d070,
   routePreview: 0x7fe3ff,
   valid: 0x6fdc7a,
   invalid: 0xff5a4f,
-  hpBack: 0x2a1515,
-  hpFill: 0x5fd06a,
-  hpLow: 0xe0503e,
+  hpBack: 0x1a1414,
   heroOutline: 0xffffff,
   slowRing: 0x8fd0ff,
 };
@@ -51,6 +62,8 @@ export const TEXT_COLORS = {
   sub: '#9aa0ad',
   accent: '#f0c060',
   danger: '#ff7a6b',
+  ally: '#8fc0ff',
+  enemy: '#ff8a7a',
   good: '#7fe08a',
 };
 
