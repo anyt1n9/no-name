@@ -204,7 +204,7 @@ export function checkTerrainPlacement(state: BattleState, handIndex: number, x: 
   const card = state.hand[handIndex];
   if (!card) return fail('地形カードを選んでください');
   if (!inBounds(state.grid, x, y)) return fail('マップの外です');
-  if (isReserved(state, x, y)) return fail('入口と城には置けません');
+  if (isReserved(state, x, y)) return fail('敵の城と味方の城には置けません');
   const tile = tileAt(state.grid, x, y);
   if (tile.terrain !== 'plain') return fail('すでに地形があります');
   if (tile.towerUid !== null) return fail('タワーがあるマスには置けません');
@@ -227,7 +227,7 @@ export function placeTerrain(state: BattleState, handIndex: number, x: number, y
 export function checkTowerPlacement(state: BattleState, towerId: TowerId, x: number, y: number): CommandResult {
   if (state.phase !== 'prep' && state.phase !== 'combat') return fail('いまは建てられません');
   if (!inBounds(state.grid, x, y)) return fail('マップの外です');
-  if (isReserved(state, x, y)) return fail('入口と城には建てられません');
+  if (isReserved(state, x, y)) return fail('敵の城と味方の城には建てられません');
   const tile = tileAt(state.grid, x, y);
   if (tile.towerUid !== null) return fail('すでにタワーがあります');
   const terrain = TERRAIN[tile.terrain];
@@ -317,7 +317,7 @@ export function drainEvents(state: BattleState): BattleEvent[] {
   return events;
 }
 
-/** 入口から城まで、いま敵が通るルート */
+/** 敵の城（entrance）から味方の城（castle）まで、いま敵が通るルート */
 export function enemyRoute(state: BattleState): GridPoint[] {
   return traceRoute(state.grid, state.field, state.entrance) ?? [];
 }
@@ -362,7 +362,7 @@ function isReserved(state: BattleState, x: number, y: number): boolean {
   return samePoint(point, state.entrance) || samePoint(point, state.castle);
 }
 
-/** (x, y) を通れなくしても、入口と敵から城へたどり着けるか */
+/** (x, y) を通れなくしても、敵の城と今いる敵から味方の城へたどり着けるか */
 function checkStillReachable(state: BattleState, x: number, y: number): CommandResult {
   const point = { x, y };
   for (const enemy of state.enemies) {

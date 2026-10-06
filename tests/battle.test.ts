@@ -14,12 +14,12 @@ import { simulate } from '../src/core/bot';
 import { inBounds, tileAt } from '../src/core/grid';
 import { computeDistanceField } from '../src/core/pathfinding';
 import { HERO_JOBS } from '../src/data/heroes';
-import { FIRST_STAGE } from '../src/data/stage';
+import { FIRST_STAGE, type StageDef } from '../src/data/stage';
 import { TOWERS } from '../src/data/towers';
 
 /** 最初から置かれている地形をすべて消したバトル（テストで形を決めやすくするため） */
-function emptyBattle(seed = 1): BattleState {
-  const state = createBattle(FIRST_STAGE, seed);
+function emptyBattle(seed = 1, stage: StageDef = FIRST_STAGE): BattleState {
+  const state = createBattle(stage, seed);
   for (const tile of state.grid.tiles) tile.terrain = 'plain';
   state.field = computeDistanceField(state.grid, state.castle);
   return state;
@@ -72,7 +72,16 @@ describe('マップと準備フェーズ', () => {
     }
   });
 
-  it('入口と城のまわりは空いている', () => {
+  it('敵の城は左端の中央、味方の城は右端の中央にある', () => {
+    const middle = Math.floor(FIRST_STAGE.height / 2);
+    for (let seed = 1; seed <= 30; seed++) {
+      const state = createBattle(FIRST_STAGE, seed);
+      expect(state.entrance).toEqual({ x: 0, y: middle });
+      expect(state.castle).toEqual({ x: FIRST_STAGE.width - 1, y: middle });
+    }
+  });
+
+  it('敵の城と味方の城のまわりは空いている', () => {
     for (let seed = 1; seed <= 30; seed++) {
       const state = createBattle(FIRST_STAGE, seed);
       for (const point of [state.entrance, state.castle]) {
@@ -177,7 +186,12 @@ describe('タワー', () => {
   });
 
   it('敵を倒すとお金が増える', () => {
-    const state = emptyBattle();
+    // 難しさの調整に左右されないよう、弱い敵だけのステージで確かめる
+    const easyStage: StageDef = {
+      ...FIRST_STAGE,
+      waves: [{ hpMultiplier: 0.5, groups: [{ enemy: 'goblin', count: 3, interval: 1, delay: 0 }] }],
+    };
+    const state = emptyBattle(1, easyStage);
     const spot = enemyRoute(state)[3];
     const candidates = [
       { x: spot.x, y: spot.y - 1 },

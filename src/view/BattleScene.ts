@@ -235,7 +235,7 @@ export class BattleScene extends Phaser.Scene {
     this.sidebarInner = width;
 
     this.add.text(left, 10, 'ソウルパス（仮）', textStyle(18, TEXT_COLORS.main, true));
-    this.add.text(left, 34, `シード ${this.state.seed}　v0.1.1`, textStyle(11, TEXT_COLORS.sub));
+    this.add.text(left, 34, `シード ${this.state.seed}　v0.1.2`, textStyle(11, TEXT_COLORS.sub));
     this.phaseText = this.add.text(left, 54, '', textStyle(15, TEXT_COLORS.accent, true));
     this.statusText = this.add.text(left, 76, '', textStyle(14));
     this.waveText = this.add.text(left, 98, '', textStyle(12, TEXT_COLORS.sub));
@@ -318,7 +318,7 @@ export class BattleScene extends Phaser.Scene {
     legend.fillCircle(left + 7, 496, 6);
     legend.lineStyle(2, COLORS.enemy, 1);
     legend.strokeCircle(left + 7, 496, 6);
-    this.add.text(left + 20, 488, '敵は赤（入口から攻めてくる）', textStyle(12, TEXT_COLORS.enemy));
+    this.add.text(left + 20, 488, '敵は赤（敵の城から攻めてくる）', textStyle(12, TEXT_COLORS.enemy));
 
     this.add.text(
       left,
@@ -535,25 +535,24 @@ export class BattleScene extends Phaser.Scene {
     for (let x = 0; x <= grid.width; x++) g.lineBetween(x * TILE, 0, x * TILE, MAP_HEIGHT);
     for (let y = 0; y <= grid.height; y++) g.lineBetween(0, y * TILE, MAP_WIDTH, y * TILE);
 
-    // 敵の入口は赤
-    g.fillStyle(COLORS.entrance);
-    g.fillRect(entrance.x * TILE + 2, entrance.y * TILE + 2, TILE - 4, TILE - 4);
-    g.lineStyle(2, COLORS.enemy, 1);
-    g.strokeRect(entrance.x * TILE + 2, entrance.y * TILE + 2, TILE - 4, TILE - 4);
-    this.addTerrainLabel(toPixel(entrance.x), toPixel(entrance.y), '入口', 13, true);
-
-    // 味方の城は青
-    const castleLeft = castle.x * TILE;
-    const castleTop = castle.y * TILE;
-    g.fillStyle(COLORS.allyDark);
-    g.fillRect(castleLeft + 2, castleTop + 2, TILE - 4, TILE - 4);
-    g.fillStyle(COLORS.castle);
-    g.fillRect(castleLeft + 6, castleTop + 14, TILE - 12, TILE - 20);
-    g.fillStyle(COLORS.castleTop);
-    for (let i = 0; i < 3; i++) g.fillRect(castleLeft + 6 + i * 13, castleTop + 7, 10, 9);
-    g.lineStyle(2, COLORS.ally, 1);
-    g.strokeRect(castleLeft + 2, castleTop + 2, TILE - 4, TILE - 4);
+    // 敵の城（左端の中央）は赤、味方の城（右端の中央）は青
+    this.drawCastle(g, entrance, COLORS.enemyDark, COLORS.entrance, COLORS.enemyCastleTop, COLORS.enemy);
+    this.addTerrainLabel(toPixel(entrance.x), toPixel(entrance.y) + 5, '敵の城', 12, true);
+    this.drawCastle(g, castle, COLORS.allyDark, COLORS.castle, COLORS.castleTop, COLORS.ally);
     this.addTerrainLabel(toPixel(castle.x), toPixel(castle.y) + 5, '城', 16, true);
+  }
+
+  private drawCastle(g: Phaser.GameObjects.Graphics, at: GridPoint, base: number, wall: number, top: number, border: number): void {
+    const left = at.x * TILE;
+    const topY = at.y * TILE;
+    g.fillStyle(base);
+    g.fillRect(left + 2, topY + 2, TILE - 4, TILE - 4);
+    g.fillStyle(wall);
+    g.fillRect(left + 6, topY + 14, TILE - 12, TILE - 20);
+    g.fillStyle(top);
+    for (let i = 0; i < 3; i++) g.fillRect(left + 6 + i * 13, topY + 7, 10, 9);
+    g.lineStyle(2, border, 1);
+    g.strokeRect(left + 2, topY + 2, TILE - 4, TILE - 4);
   }
 
   /** 草原の飾り（花・草むら・小石）。見た目だけで、ルールには関係ない */
@@ -935,9 +934,9 @@ export class BattleScene extends Phaser.Scene {
       const result = checkTowerPlacement(state, selection.id, tile.x, tile.y);
       return result.ok ? null : { text: result.reason, warning: true };
     }
-    if (samePoint(tile, state.entrance)) return { text: '入口：ここから敵が現れる。', warning: false };
+    if (samePoint(tile, state.entrance)) return { text: '敵の城：ここから魔物が攻めてくる。', warning: false };
     if (samePoint(tile, state.castle)) {
-      return { text: '城：敵がたどり着くと城HPが減る。0になると負け。', warning: false };
+      return { text: '味方の城：敵がたどり着くと城HPが減る。0になると負け。', warning: false };
     }
     const mapTile = tileAt(state.grid, tile.x, tile.y);
     const tower = state.towers.find((t) => t.uid === mapTile.towerUid);

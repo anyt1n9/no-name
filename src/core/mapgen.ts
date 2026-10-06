@@ -17,15 +17,17 @@ interface MapContext {
   grid: Grid;
   entrance: GridPoint;
   castle: GridPoint;
-  /** 入口と城のまわりなど、地形を置かずに空けておくマス */
+  /** 敵の城と味方の城のまわりなど、地形を置かずに空けておくマス */
   reserved: Set<number>;
   rng: Rng;
 }
 
 export function generateMap(stage: StageDef, rng: Rng): GeneratedMap {
   const grid = createGrid(stage.width, stage.height);
-  const entrance = pickEdgePoint(stage, rng, 'left');
-  const castle = pickEdgePoint(stage, rng, 'right');
+  // 敵の城は左端の中央、味方の城は右端の中央に固定する（マップの真ん中で戦えるように）
+  const middle = Math.floor(stage.height / 2);
+  const entrance = { x: 0, y: middle };
+  const castle = { x: stage.width - 1, y: middle };
   const reserved = new Set<number>();
   for (let y = 0; y < stage.height; y++) {
     for (let x = 0; x < stage.width; x++) {
@@ -44,18 +46,7 @@ export function generateMap(stage: StageDef, rng: Rng): GeneratedMap {
   return { grid, entrance, castle };
 }
 
-/** 入口は左側、城は右側に置く。たまに上下の端にずらして、向きに変化をつける */
-function pickEdgePoint(stage: StageDef, rng: Rng, side: 'left' | 'right'): GridPoint {
-  const { width, height } = stage;
-  const roll = nextFloat(rng);
-  if (roll < 0.6) {
-    return { x: side === 'left' ? 0 : width - 1, y: nextInt(rng, 1, height - 2) };
-  }
-  const x = side === 'left' ? nextInt(rng, 1, 3) : nextInt(rng, width - 4, width - 2);
-  return { x, y: roll < 0.8 ? 0 : height - 1 };
-}
-
-/** 通れない地形を置く。置くと入口から城へ行けなくなる場合は置かない */
+/** 通れない地形を置く。置くと敵の城から味方の城へ行けなくなる場合は置かない */
 function placeBlocking(context: MapContext, x: number, y: number, terrain: TerrainId): boolean {
   const { grid, castle, entrance } = context;
   if (!canUse(context, x, y)) return false;

@@ -58,24 +58,24 @@ export const FIRST_STAGE: StageDef = {
   starterDeck: ['mountain', 'mountain', 'mountain', 'mountain', 'mountain', 'mountain', 'forest', 'forest', 'forest', 'forest'],
   map: { ridges: [1, 2], lakes: [0, 1], groves: [2, 3], rocks: [2, 4] },
   waves: [
-    { hpMultiplier: 1.85, groups: [{ enemy: 'goblin', count: 6, interval: 1.4, delay: 0 }] },
+    { hpMultiplier: 2.05, groups: [{ enemy: 'goblin', count: 6, interval: 1.4, delay: 0 }] },
     {
-      hpMultiplier: 2,
+      hpMultiplier: 2.2,
       groups: [
         { enemy: 'goblin', count: 8, interval: 1.1, delay: 0 },
         { enemy: 'wolf', count: 4, interval: 1, delay: 4 },
       ],
     },
-    { hpMultiplier: 2.2, groups: [{ enemy: 'wolf', count: 12, interval: 0.7, delay: 0 }] },
+    { hpMultiplier: 2.4, groups: [{ enemy: 'wolf', count: 12, interval: 0.7, delay: 0 }] },
     {
-      hpMultiplier: 2.45,
+      hpMultiplier: 2.7,
       groups: [
         { enemy: 'goblin', count: 14, interval: 0.8, delay: 0 },
         { enemy: 'wolf', count: 8, interval: 0.9, delay: 3 },
       ],
     },
     {
-      hpMultiplier: 2.75,
+      hpMultiplier: 3,
       groups: [
         { enemy: 'goblin', count: 18, interval: 0.6, delay: 0 },
         { enemy: 'wolf', count: 14, interval: 0.6, delay: 2 },

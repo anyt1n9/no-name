@@ -14,7 +14,7 @@ export const GAME_HEIGHT = MAP_HEIGHT + BOTTOM_HEIGHT;
 export const FONT =
   '"Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", "Noto Sans JP", "Noto Sans CJK JP", sans-serif';
 
-// 色の決まり：味方（英雄・タワー・城）は青、敵（魔物・入口）は赤。地形は緑・灰・水色の落ち着いた色にする
+// 色の決まり：味方（英雄・タワー・城）は青、敵（魔物・敵の城）は赤。地形は緑・灰・水色の落ち着いた色にする
 export const COLORS = {
   ally: 0x3d8bff,
   allyDark: 0x173a75,
@@ -43,7 +43,8 @@ export const COLORS = {
   forestTreeDark: 0x24703a,
   lake: 0x285f6b,
   lakeRipple: 0x4b97a3,
-  entrance: 0x7a1f1a,
+  entrance: 0x9a2a22,
+  enemyCastleTop: 0xe0786a,
   castle: 0x4a6fa8,
   castleTop: 0x8fb3e8,
   road: 0x8f6e42,
