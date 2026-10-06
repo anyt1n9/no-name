@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createBattle,
+  activeHero,
   deployHero,
   enemyRoute,
   FIXED_DT,
@@ -9,11 +10,12 @@ import {
   startCombat,
   step,
   type BattleState,
+  type Hero,
 } from '../src/core/battle';
 import { simulate } from '../src/core/bot';
 import { inBounds, tileAt } from '../src/core/grid';
 import { computeDistanceField } from '../src/core/pathfinding';
-import { HERO_JOBS } from '../src/data/heroes';
+import { HERO_JOBS, type HeroJobId } from '../src/data/heroes';
 import { FIRST_STAGE, type StageDef } from '../src/data/stage';
 import { TOWERS } from '../src/data/towers';
 
@@ -23,6 +25,21 @@ function emptyBattle(seed = 1, stage: StageDef = FIRST_STAGE): BattleState {
   for (const tile of state.grid.tiles) tile.terrain = 'plain';
   state.field = computeDistanceField(state.grid, state.castle);
   return state;
+}
+
+/** 指定した役職の英雄 */
+function heroOf(state: BattleState, job: HeroJobId): Hero {
+  const hero = state.heroes.find((h) => h.job === job);
+  if (!hero) throw new Error(`${job} がいません`);
+  return hero;
+}
+
+/** 難しさの調整に左右されないよう、弱い敵だけにしたステージ */
+function easyStage(): StageDef {
+  return {
+    ...FIRST_STAGE,
+    waves: [{ hpMultiplier: 0.5, groups: [{ enemy: 'goblin', count: 3, interval: 1, delay: 0 }] }],
+  };
 }
 
 /** 条件を満たすまで時間を進める */
@@ -63,7 +80,7 @@ describe('マップと準備フェーズ', () => {
     expect(a.entrance).toEqual(b.entrance);
     expect(a.castle).toEqual(b.castle);
     expect(a.hand.map((c) => c.terrain)).toEqual(b.hand.map((c) => c.terrain));
-    expect(a.hero.name).toBe(b.hero.name);
+    expect(a.heroes.map((h) => h.name)).toEqual(b.heroes.map((h) => h.name));
   });
 
   it('最初のマップは必ず入口から城へたどり着ける', () => {
@@ -186,12 +203,7 @@ describe('タワー', () => {
   });
 
   it('敵を倒すとお金が増える', () => {
-    // 難しさの調整に左右されないよう、弱い敵だけのステージで確かめる
-    const easyStage: StageDef = {
-      ...FIRST_STAGE,
-      waves: [{ hpMultiplier: 0.5, groups: [{ enemy: 'goblin', count: 3, interval: 1, delay: 0 }] }],
-    };
-    const state = emptyBattle(1, easyStage);
+    const state = emptyBattle(1, easyStage());
     const spot = enemyRoute(state)[3];
     const candidates = [
       { x: spot.x, y: spot.y - 1 },
@@ -219,13 +231,29 @@ describe('戦闘', () => {
     expect(state.castleHp).toBe(0);
   });
 
-  it('英雄は敵を足止めする', () => {
+  it('英雄を3人連れていて、役職はそれぞれ違う', () => {
+    const state = emptyBattle();
+    expect(state.heroes).toHaveLength(3);
+    expect(new Set(state.heroes.map((h) => h.job)).size).toBe(3);
+    expect(new Set(state.heroes.map((h) => h.name)).size).toBe(3);
+  });
+
+  it('戦場に出せる英雄は同時に1人だけ', () => {
+    const state = emptyBattle();
+    const [first, second] = state.heroes;
+    expect(deployHero(state, first.uid).ok).toBe(true);
+    expect(deployHero(state, second.uid).ok).toBe(false);
+    expect(activeHero(state)?.uid).toBe(first.uid);
+  });
+
+  it('剣士は敵を足止めする', () => {
     const state = emptyBattle();
     startCombat(state);
-    deployHero(state);
+    const swordsman = heroOf(state, 'swordsman');
+    deployHero(state, swordsman.uid);
     const spot = enemyRoute(state)[4];
-    state.hero.x = spot.x;
-    state.hero.y = spot.y;
+    swordsman.x = spot.x;
+    swordsman.y = spot.y;
     expect(runUntil(state, () => state.enemies.some((e) => e.engaged))).toBe(true);
     const enemy = state.enemies.find((e) => e.engaged)!;
     const position = { x: enemy.x, y: enemy.y };
@@ -233,25 +261,59 @@ describe('戦闘', () => {
     expect({ x: enemy.x, y: enemy.y }).toEqual(position);
   });
 
-  it('英雄が倒れると死亡が記録され、時間が経つと再び出撃できる', () => {
+  it('弓兵は足止めせず、離れた敵を攻撃する', () => {
+    const state = emptyBattle(1, easyStage());
+    startCombat(state);
+    const archer = heroOf(state, 'archer');
+    deployHero(state, archer.uid);
+    const spot = enemyRoute(state)[5];
+    archer.x = spot.x;
+    archer.y = spot.y - 2;
+    expect(runUntil(state, () => state.kills > 0)).toBe(true);
+    expect(state.enemies.some((e) => e.engaged)).toBe(false);
+    expect(archer.hp).toBe(archer.maxHp);
+  });
+
+  it('魔法使いは範囲攻撃で、固まった敵をまとめて攻撃する', () => {
     const state = emptyBattle();
     startCombat(state);
-    deployHero(state);
-    const spot = enemyRoute(state)[4];
-    state.hero.x = spot.x;
-    state.hero.y = spot.y;
-    expect(runUntil(state, () => state.enemies.some((e) => e.engaged))).toBe(true);
-    state.hero.hp = 1;
-    expect(runUntil(state, () => state.hero.status === 'down', 10)).toBe(true);
-    expect(state.hero.deaths).toBe(1);
-    expect(state.deathLog).toHaveLength(1);
-    expect(state.deathLog[0].heroName).toBe(state.hero.name);
-    expect(deployHero(state).ok).toBe(false);
+    // 敵を2体、同じ場所に並べる
+    for (let i = 0; i < 2 && state.spawnQueue.length > 0; i++) state.spawnQueue[i].time = 0;
+    step(state);
+    expect(state.enemies.length).toBeGreaterThanOrEqual(2);
+    const mage = heroOf(state, 'mage');
+    deployHero(state, mage.uid);
+    mage.x = state.enemies[0].x + 1;
+    mage.y = state.enemies[0].y;
+    expect(runUntil(state, () => state.enemies.filter((e) => e.hp < e.maxHp).length >= 2, 5)).toBe(true);
+  });
 
+  it('英雄が倒れると死亡が記録され、ほかの英雄に交代できる。時間が経てば再び出撃できる', () => {
+    const state = emptyBattle();
+    startCombat(state);
+    const swordsman = heroOf(state, 'swordsman');
+    deployHero(state, swordsman.uid);
+    const spot = enemyRoute(state)[4];
+    swordsman.x = spot.x;
+    swordsman.y = spot.y;
+    expect(runUntil(state, () => state.enemies.some((e) => e.engaged))).toBe(true);
+    swordsman.hp = 1;
+    expect(runUntil(state, () => swordsman.status === 'down', 10)).toBe(true);
+    expect(swordsman.deaths).toBe(1);
+    expect(state.deathLog).toHaveLength(1);
+    expect(state.deathLog[0].heroName).toBe(swordsman.name);
+    expect(deployHero(state, swordsman.uid).ok).toBe(false);
+
+    // 倒れている間は、ほかの英雄に交代して出撃できる
+    const archer = heroOf(state, 'archer');
+    expect(deployHero(state, archer.uid).ok).toBe(true);
+    expect(activeHero(state)?.uid).toBe(archer.uid);
+
+    // 弓兵が出ている間は、剣士が復活しても同時には出せない
     const respawn = HERO_JOBS.swordsman.respawnTime;
-    expect(runUntil(state, () => state.hero.status === 'ready', respawn + 1)).toBe(true);
-    expect(deployHero(state).ok).toBe(true);
-    expect(state.hero.hp).toBe(state.hero.maxHp);
+    expect(runUntil(state, () => swordsman.status === 'ready', respawn + 1)).toBe(true);
+    expect(deployHero(state, swordsman.uid).ok).toBe(false);
+    expect(swordsman.hp).toBe(swordsman.maxHp);
   });
 
   it('同じシード値と同じ操作なら、結果も同じになる', () => {

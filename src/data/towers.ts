@@ -1,5 +1,6 @@
 // タワーの定義。数値はすべて仮で、遊びながら調整する。
 
+import type { IconId } from './icons';
 import type { TerrainId } from './terrain';
 
 export type TowerId = 'arrow' | 'fire' | 'water';
@@ -9,8 +10,8 @@ export type Element = 'none' | 'fire' | 'water' | 'wind' | 'thunder' | 'poison' 
 export interface TowerDef {
   id: TowerId;
   name: string;
-  /** 色だけに頼らず区別するための1文字 */
-  icon: string;
+  /** 色だけに頼らず形でも区別するためのアイコン */
+  icon: IconId;
   element: Element;
   cost: number;
   /** 射程（マス） */
@@ -34,7 +35,7 @@ export const TOWERS: Record<TowerId, TowerDef> = {
   arrow: {
     id: 'arrow',
     name: '弓塔',
-    icon: '弓',
+    icon: 'arrow',
     element: 'none',
     cost: 50,
     range: 3,
@@ -50,7 +51,7 @@ export const TOWERS: Record<TowerId, TowerDef> = {
   fire: {
     id: 'fire',
     name: '火の塔',
-    icon: '火',
+    icon: 'flame',
     element: 'fire',
     cost: 80,
     range: 2.5,
@@ -66,7 +67,7 @@ export const TOWERS: Record<TowerId, TowerDef> = {
   water: {
     id: 'water',
     name: '水の塔',
-    icon: '水',
+    icon: 'drop',
     element: 'water',
     cost: 60,
     range: 2.5,

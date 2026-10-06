@@ -1,13 +1,14 @@
 // 敵の定義。数値はすべて仮で、遊びながら調整する。
 
+import type { IconId } from './icons';
+
 export type EnemyId = 'goblin' | 'wolf';
 
 export interface EnemyDef {
   id: EnemyId;
   name: string;
-  /** 色だけに頼らず区別するための1文字と形 */
-  icon: string;
-  shape: 'circle' | 'diamond';
+  /** 色だけに頼らず形でも区別するためのアイコン */
+  icon: IconId;
   hp: number;
   /** 移動速度（マス/秒） */
   speed: number;
@@ -29,8 +30,7 @@ export const ENEMIES: Record<EnemyId, EnemyDef> = {
   goblin: {
     id: 'goblin',
     name: 'ゴブリン',
-    icon: 'ゴ',
-    shape: 'circle',
+    icon: 'goblin',
     hp: 40,
     speed: 1,
     reward: 6,
@@ -45,8 +45,7 @@ export const ENEMIES: Record<EnemyId, EnemyDef> = {
   wolf: {
     id: 'wolf',
     name: '魔狼',
-    icon: '狼',
-    shape: 'diamond',
+    icon: 'wolf',
     hp: 26,
     speed: 1.8,
     reward: 5,

@@ -7,6 +7,8 @@ export interface ButtonOptions {
   width: number;
   height: number;
   fontSize?: number;
+  /** 文字を中央から上下にずらす量（アイコンと並べるときに使う） */
+  labelOffsetY?: number;
   onClick: () => void;
   /** マウスを乗せたときに呼ばれる（説明文の表示などに使う） */
   onHover?: () => void;
@@ -26,7 +28,7 @@ export class Button {
       .setStrokeStyle(1, COLORS.buttonBorder)
       .setInteractive({ useHandCursor: true });
     this.label = scene.add
-      .text(x + options.width / 2, y + options.height / 2, text, {
+      .text(x + options.width / 2, y + options.height / 2 + (options.labelOffsetY ?? 0), text, {
         fontFamily: FONT,
         fontSize: `${options.fontSize ?? 14}px`,
         color: TEXT_COLORS.main,

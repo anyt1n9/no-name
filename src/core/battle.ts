@@ -1,7 +1,7 @@
 // 1ステージ分の防衛戦のルール。画面（Phaser）には一切依存しないので、テストやシミュレーションでそのまま動かせる。
 
 import { ENEMIES, type EnemyId } from '../data/enemies';
-import { HERO_JOBS, HERO_NAMES, type HeroJobId } from '../data/heroes';
+import { HERO_JOBS, HERO_NAMES, STARTING_PARTY, type HeroJobId } from '../data/heroes';
 import type { StageDef } from '../data/stage';
 import { TERRAIN, type TerrainCardId } from '../data/terrain';
 import { TOWERS, type TowerId } from '../data/towers';
@@ -19,7 +19,7 @@ import {
 } from './grid';
 import { generateMap } from './mapgen';
 import { computeDistanceField, findPath, nextStep, traceRoute } from './pathfinding';
-import { createRng, pick, shuffle, type Rng } from './rng';
+import { createRng, shuffle, type Rng } from './rng';
 
 /** ルールを1回進める時間（秒）。画面側もテストもこの刻みで step を呼ぶ */
 export const FIXED_DT = 1 / 60;
@@ -96,11 +96,11 @@ export interface DeathRecord {
 /** 画面側に演出を伝えるための出来事 */
 export type BattleEvent =
   | { type: 'shot'; tower: TowerId; fromX: number; fromY: number; toX: number; toY: number }
-  | { type: 'splash'; x: number; y: number; radius: number }
   | { type: 'enemyKilled'; x: number; y: number; reward: number }
   | { type: 'castleHit'; damage: number }
-  | { type: 'heroStrike'; x: number; y: number }
-  | { type: 'heroDown'; x: number; y: number }
+  | { type: 'heroStrike'; job: HeroJobId; fromX: number; fromY: number; toX: number; toY: number }
+  | { type: 'splash'; x: number; y: number; radius: number }
+  | { type: 'heroDown'; heroUid: number; x: number; y: number }
   | { type: 'waveStart'; wave: number };
 
 interface SpawnEntry {
@@ -125,7 +125,8 @@ export interface BattleState {
   hand: TerrainCard[];
   towers: Tower[];
   enemies: Enemy[];
-  hero: Hero;
+  /** 冒険に連れてきた英雄（戦場に出せるのは同時に1人まで） */
+  heroes: Hero[];
   /** いまのウェーブ（0始まり）。戦闘開始前は -1 */
   waveIndex: number;
   waveTime: number;
@@ -143,7 +144,7 @@ export type CommandResult = { ok: true } | { ok: false; reason: string };
 const OK: CommandResult = { ok: true };
 const fail = (reason: string): CommandResult => ({ ok: false, reason });
 
-export function createBattle(stage: StageDef, seed: number, heroJob: HeroJobId = 'swordsman'): BattleState {
+export function createBattle(stage: StageDef, seed: number, party: HeroJobId[] = STARTING_PARTY): BattleState {
   const rng = createRng(seed);
   const { grid, entrance, castle } = generateMap(stage, rng);
   let nextUid = 1;
@@ -152,21 +153,21 @@ export function createBattle(stage: StageDef, seed: number, heroJob: HeroJobId =
     stage.starterDeck.map((terrain) => ({ uid: nextUid++, terrain })),
   );
   const hand = deck.splice(0, stage.handSize);
-  const job = HERO_JOBS[heroJob];
-  const hero: Hero = {
+  const names = shuffle(rng, [...HERO_NAMES]);
+  const heroes: Hero[] = party.map((job, i) => ({
     uid: nextUid++,
-    name: pick(rng, HERO_NAMES),
-    job: heroJob,
+    name: names[i % names.length],
+    job,
     status: 'ready',
     x: castle.x,
     y: castle.y,
-    hp: job.hp,
-    maxHp: job.hp,
+    hp: HERO_JOBS[job].hp,
+    maxHp: HERO_JOBS[job].hp,
     respawnLeft: 0,
     path: [],
     attackCooldown: 0,
     deaths: 0,
-  };
+  }));
   return {
     stage,
     seed,
@@ -183,7 +184,7 @@ export function createBattle(stage: StageDef, seed: number, heroJob: HeroJobId =
     hand,
     towers: [],
     enemies: [],
-    hero,
+    heroes,
     waveIndex: -1,
     waveTime: 0,
     spawnQueue: [],
@@ -233,8 +234,8 @@ export function checkTowerPlacement(state: BattleState, towerId: TowerId, x: num
   const terrain = TERRAIN[tile.terrain];
   if (!terrain.buildable) return fail(`${terrain.name}には建てられません`);
   if (state.gold < TOWERS[towerId].cost) return fail('お金が足りません');
-  const hero = state.hero;
-  if (hero.status === 'active' && samePoint(tileOf(hero), { x, y })) return fail('英雄がいる場所には建てられません');
+  const hero = activeHero(state);
+  if (hero && samePoint(tileOf(hero), { x, y })) return fail('英雄がいる場所には建てられません');
   // 敵のルートを変えられるのは地形カードだけにするため、ルートの上には建てさせない
   if (enemyRoute(state).some((p) => p.x === x && p.y === y)) {
     return fail('敵の通り道には建てられません（道は地形カードで変えられます）');
@@ -265,11 +266,19 @@ export function startCombat(state: BattleState): CommandResult {
   return OK;
 }
 
-export function deployHero(state: BattleState): CommandResult {
-  const hero = state.hero;
+/** いま戦場に出ている英雄（いなければ null） */
+export function activeHero(state: BattleState): Hero | null {
+  return state.heroes.find((h) => h.status === 'active') ?? null;
+}
+
+export function deployHero(state: BattleState, heroUid: number): CommandResult {
+  const hero = state.heroes.find((h) => h.uid === heroUid);
+  if (!hero) return fail('その英雄はいません');
   if (state.phase !== 'prep' && state.phase !== 'combat') return fail('いまは出撃できません');
   if (hero.status === 'active') return fail('すでに出撃しています');
-  if (hero.status === 'down') return fail(`復活まであと${Math.ceil(hero.respawnLeft)}秒です`);
+  if (hero.status === 'down') return fail(`${hero.name}は復活まであと${Math.ceil(hero.respawnLeft)}秒です`);
+  const other = activeHero(state);
+  if (other) return fail(`同時に出撃できるのは1人です（${other.name}が倒れたら交代できます）`);
   hero.status = 'active';
   hero.x = state.castle.x;
   hero.y = state.castle.y;
@@ -280,8 +289,8 @@ export function deployHero(state: BattleState): CommandResult {
 }
 
 export function moveHero(state: BattleState, x: number, y: number): CommandResult {
-  const hero = state.hero;
-  if (hero.status !== 'active') return fail('英雄が出撃していません');
+  const hero = activeHero(state);
+  if (!hero) return fail('英雄が出撃していません');
   if (!isGroundPassable(state.grid, x, y)) return fail('そこへは移動できません');
   const path = findPath(state.grid, tileOf(hero), { x, y });
   if (!path) return fail('そこへは行けません');
@@ -384,8 +393,8 @@ function checkStillReachable(state: BattleState, x: number, y: number): CommandR
 
 function onGridChanged(state: BattleState): void {
   state.field = computeDistanceField(state.grid, state.castle);
-  const hero = state.hero;
-  if (hero.path.length > 0 && hero.path.some((p) => !isGroundPassable(state.grid, p.x, p.y))) {
+  const hero = activeHero(state);
+  if (hero && hero.path.length > 0 && hero.path.some((p) => !isGroundPassable(state.grid, p.x, p.y))) {
     const destination = hero.path[hero.path.length - 1];
     hero.path = findPath(state.grid, tileOf(hero), destination) ?? [];
   }
@@ -454,8 +463,8 @@ function spawnEnemy(state: BattleState, type: EnemyId): void {
 }
 
 function updateEnemies(state: BattleState, dt: number): void {
-  const hero = state.hero;
-  const job = HERO_JOBS[hero.job];
+  const hero = activeHero(state);
+  const blockCount = hero ? HERO_JOBS[hero.job].blockCount : 0;
   let engagedCount = state.enemies.filter((e) => e.engaged && !e.dead).length;
 
   for (const enemy of state.enemies) {
@@ -467,15 +476,16 @@ function updateEnemies(state: BattleState, dt: number): void {
       if (enemy.slowTimer <= 0) enemy.slowMultiplier = 1;
     }
 
-    if (enemy.engaged && (hero.status !== 'active' || distance(hero, enemy) > RELEASE_RADIUS)) {
+    if (enemy.engaged && (!hero || hero.status !== 'active' || distance(hero, enemy) > RELEASE_RADIUS)) {
       enemy.engaged = false;
       engagedCount--;
     }
     if (
       !enemy.engaged &&
+      hero &&
       hero.status === 'active' &&
       !def.flying &&
-      engagedCount < job.blockCount &&
+      engagedCount < blockCount &&
       distance(hero, enemy) <= ENGAGE_RADIUS
     ) {
       enemy.engaged = true;
@@ -483,13 +493,13 @@ function updateEnemies(state: BattleState, dt: number): void {
       enemy.attackCooldown = def.attackInterval / 2;
     }
 
-    if (enemy.engaged) {
+    if (enemy.engaged && hero) {
       enemy.attackCooldown -= dt;
       if (enemy.attackCooldown <= 0) {
         enemy.attackCooldown += def.attackInterval;
         hero.hp -= def.attackDamage;
         if (hero.hp <= 0) {
-          heroDown(state, enemy.type);
+          heroDown(state, hero, enemy.type);
           engagedCount = 0;
         }
       }
@@ -596,19 +606,20 @@ function damageEnemy(state: BattleState, enemy: Enemy, amount: number): void {
 }
 
 function updateHeroTimers(state: BattleState, dt: number): void {
-  const hero = state.hero;
-  if (hero.status !== 'down') return;
-  hero.respawnLeft -= dt;
-  if (hero.respawnLeft <= 0) {
-    hero.respawnLeft = 0;
-    hero.status = 'ready';
-    hero.hp = hero.maxHp;
+  for (const hero of state.heroes) {
+    if (hero.status !== 'down') continue;
+    hero.respawnLeft -= dt;
+    if (hero.respawnLeft <= 0) {
+      hero.respawnLeft = 0;
+      hero.status = 'ready';
+      hero.hp = hero.maxHp;
+    }
   }
 }
 
 function updateHeroMovement(state: BattleState, dt: number): void {
-  const hero = state.hero;
-  if (hero.status !== 'active' || hero.path.length === 0) return;
+  const hero = activeHero(state);
+  if (!hero || hero.path.length === 0) return;
   const under = tileOf(hero);
   let remaining = HERO_JOBS[hero.job].speed * TERRAIN[tileAt(state.grid, under.x, under.y).terrain].speedMultiplier * dt;
 
@@ -633,8 +644,8 @@ function updateHeroMovement(state: BattleState, dt: number): void {
 }
 
 function updateHeroAttack(state: BattleState, dt: number): void {
-  const hero = state.hero;
-  if (hero.status !== 'active') return;
+  const hero = activeHero(state);
+  if (!hero) return;
   const job = HERO_JOBS[hero.job];
   const engaged = state.enemies.filter((e) => e.engaged && !e.dead);
 
@@ -643,16 +654,18 @@ function updateHeroAttack(state: BattleState, dt: number): void {
   hero.attackCooldown -= dt;
   if (hero.attackCooldown > 0) return;
 
+  // 足止めしている敵がいればそれを、いなければ射程内で一番城に近い敵を狙う
   let target: Enemy | null = null;
   if (engaged.length > 0) {
     target = engaged.reduce((a, b) => (b.hp < a.hp ? b : a));
   } else {
     let best = Infinity;
     for (const enemy of state.enemies) {
-      if (enemy.dead || ENEMIES[enemy.type].flying) continue;
-      const d = distance(hero, enemy);
-      if (d <= job.range && d < best) {
-        best = d;
+      if (enemy.dead || (ENEMIES[enemy.type].flying && !job.canHitAir)) continue;
+      if (distance(hero, enemy) > job.range) continue;
+      const remaining = remainingDistance(state, enemy);
+      if (remaining < best) {
+        best = remaining;
         target = enemy;
       }
     }
@@ -662,12 +675,19 @@ function updateHeroAttack(state: BattleState, dt: number): void {
     return;
   }
   hero.attackCooldown += job.interval;
-  state.events.push({ type: 'heroStrike', x: target.x, y: target.y });
-  damageEnemy(state, target, job.damage);
+  state.events.push({ type: 'heroStrike', job: hero.job, fromX: hero.x, fromY: hero.y, toX: target.x, toY: target.y });
+  if (job.splashRadius > 0) {
+    state.events.push({ type: 'splash', x: target.x, y: target.y, radius: job.splashRadius });
+    const center = { x: target.x, y: target.y };
+    for (const enemy of state.enemies) {
+      if (!enemy.dead && distance(enemy, center) <= job.splashRadius) damageEnemy(state, enemy, job.damage);
+    }
+  } else {
+    damageEnemy(state, target, job.damage);
+  }
 }
 
-function heroDown(state: BattleState, killedBy: EnemyId): void {
-  const hero = state.hero;
+function heroDown(state: BattleState, hero: Hero, killedBy: EnemyId): void {
   hero.status = 'down';
   hero.hp = 0;
   hero.respawnLeft = HERO_JOBS[hero.job].respawnTime;
@@ -682,5 +702,5 @@ function heroDown(state: BattleState, killedBy: EnemyId): void {
     time: state.time,
   });
   for (const enemy of state.enemies) enemy.engaged = false;
-  state.events.push({ type: 'heroDown', x: hero.x, y: hero.y });
+  state.events.push({ type: 'heroDown', heroUid: hero.uid, x: hero.x, y: hero.y });
 }

@@ -5,6 +5,7 @@ import type { StageDef } from '../data/stage';
 import { TERRAIN } from '../data/terrain';
 import { TOWERS, type TowerId } from '../data/towers';
 import {
+  activeHero,
   checkTerrainPlacement,
   checkTowerPlacement,
   createBattle,
@@ -91,14 +92,20 @@ export function botBuildTowers(state: BattleState): void {
   }
 }
 
-/** 英雄を出撃させて、敵の道の途中（城寄り）で待ち構えさせる */
+/** 英雄を出撃させて、敵の道の途中（城寄り）で待ち構えさせる。倒れたら次の英雄を出す */
 export function botHero(state: BattleState): void {
-  if (state.hero.status === 'ready') deployHero(state);
-  if (state.hero.status !== 'active' || state.hero.path.length > 0) return;
+  let hero = activeHero(state);
+  if (!hero) {
+    // 連れてきた順（剣士が先頭）に、出撃できる英雄を出す
+    const ready = state.heroes.find((h) => h.status === 'ready');
+    if (ready) deployHero(state, ready.uid);
+    hero = activeHero(state);
+  }
+  if (!hero || hero.path.length > 0) return;
   const route = enemyRoute(state);
   if (route.length === 0) return;
   const spot = route[Math.floor(route.length * 0.6)];
-  if (distance(state.hero, spot) > 0.5) moveHero(state, spot.x, spot.y);
+  if (distance(hero, spot) > 0.5) moveHero(state, spot.x, spot.y);
 }
 
 export function simulate(stage: StageDef, seed: number, options: BotOptions): SimulationResult {
@@ -125,7 +132,7 @@ export function simulate(stage: StageDef, seed: number, options: BotOptions): Si
     time: Math.round(state.time),
     kills: state.kills,
     towers: state.towers.length,
-    heroDeaths: state.hero.deaths,
+    heroDeaths: state.heroes.reduce((sum, h) => sum + h.deaths, 0),
     routeLength,
   };
 }

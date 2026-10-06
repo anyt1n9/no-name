@@ -3,6 +3,7 @@
 
 import * as Phaser from 'phaser';
 import {
+  activeHero,
   checkTerrainPlacement,
   checkTowerPlacement,
   createBattle,
@@ -19,10 +20,11 @@ import {
   towerInterval,
   towerRange,
   type BattleState,
+  type Hero,
 } from '../core/battle';
 import { samePoint, tileAt, tileIndex, type GridPoint } from '../core/grid';
 import { ENEMIES } from '../data/enemies';
-import { HERO_JOBS } from '../data/heroes';
+import { HERO_JOBS, type HeroJobId } from '../data/heroes';
 import { FIRST_STAGE } from '../data/stage';
 import { TERRAIN } from '../data/terrain';
 import { TOWER_ORDER, TOWERS, type TowerId } from '../data/towers';
@@ -38,6 +40,7 @@ import {
   toPixel,
   BOTTOM_HEIGHT,
 } from './layout';
+import { drawIcon } from './icons';
 import { Button } from './ui';
 
 type Selection = { kind: 'card'; index: number } | { kind: 'tower'; id: TowerId } | null;
@@ -56,6 +59,17 @@ interface Effect {
 }
 
 const SHOT_COLORS: Record<TowerId, number> = { arrow: 0xf5e6b0, fire: 0xff8a4a, water: 0x8fd0ff };
+const HERO_SHOT_COLORS: Record<HeroJobId, number> = { swordsman: 0xffffff, archer: 0xf6e7c8, mage: 0xc9b8ff };
+
+/** サイドバーの英雄1人分の行 */
+interface HeroRow {
+  uid: number;
+  y: number;
+  button: Button;
+  name: Phaser.GameObjects.Text;
+  status: Phaser.GameObjects.Text;
+  deaths: Phaser.GameObjects.Text;
+}
 
 type TextStyle = Phaser.Types.GameObjects.Text.TextStyle;
 
@@ -102,24 +116,18 @@ export class BattleScene extends Phaser.Scene {
   private entityGfx!: Phaser.GameObjects.Graphics;
   private effectGfx!: Phaser.GameObjects.Graphics;
   private sidebarGfx!: Phaser.GameObjects.Graphics;
-  private terrainLabels: Phaser.GameObjects.Text[] = [];
-  private towerLabels = new Map<number, Phaser.GameObjects.Text>();
-  private enemyLabels = new Map<number, Phaser.GameObjects.Text>();
   /** 地形を描き直すかどうかを決めるための、前回描いたルート */
   private drawnRouteKey = '';
-  private heroLabel!: Phaser.GameObjects.Text;
   private pauseLabel!: Phaser.GameObjects.Text;
 
   private phaseText!: Phaser.GameObjects.Text;
   private statusText!: Phaser.GameObjects.Text;
   private waveText!: Phaser.GameObjects.Text;
-  private heroNameText!: Phaser.GameObjects.Text;
-  private heroInfoText!: Phaser.GameObjects.Text;
   private messageText!: Phaser.GameObjects.Text;
   private startButton!: Button;
   private pauseButton!: Button;
   private speedButton!: Button;
-  private heroButton!: Button;
+  private heroRows: HeroRow[] = [];
   private cardButtons: Button[] = [];
   private towerButtons = new Map<TowerId, Button>();
   private sidebarLeft = 0;
@@ -144,10 +152,8 @@ export class BattleScene extends Phaser.Scene {
     this.errorMessage = '';
     this.errorTimer = 0;
     this.infoMessage = '';
-    this.terrainLabels = [];
-    this.towerLabels = new Map();
-    this.enemyLabels = new Map();
     this.drawnRouteKey = '';
+    this.heroRows = [];
     this.cardButtons = [];
     this.towerButtons = new Map();
   }
@@ -161,11 +167,6 @@ export class BattleScene extends Phaser.Scene {
     this.hoverGfx = this.add.graphics().setDepth(3);
     this.entityGfx = this.add.graphics().setDepth(4);
     this.effectGfx = this.add.graphics().setDepth(6);
-    this.heroLabel = this.add
-      .text(0, 0, HERO_JOBS[this.state.hero.job].icon, { ...textStyle(17, '#ffffff', true), stroke: '#10204a', strokeThickness: 3 })
-      .setOrigin(0.5)
-      .setDepth(5)
-      .setVisible(false);
     this.pauseLabel = this.add
       .text(MAP_WIDTH / 2, MAP_HEIGHT / 2, '一時停止中\nSpaceキーで再開', {
         ...textStyle(26, '#ffffff', true),
@@ -235,7 +236,7 @@ export class BattleScene extends Phaser.Scene {
     this.sidebarInner = width;
 
     this.add.text(left, 10, 'ソウルパス（仮）', textStyle(18, TEXT_COLORS.main, true));
-    this.add.text(left, 34, `シード ${this.state.seed}　v0.1.2`, textStyle(11, TEXT_COLORS.sub));
+    this.add.text(left, 34, `シード ${this.state.seed}　v0.1.3`, textStyle(11, TEXT_COLORS.sub));
     this.phaseText = this.add.text(left, 54, '', textStyle(15, TEXT_COLORS.accent, true));
     this.statusText = this.add.text(left, 76, '', textStyle(14));
     this.waveText = this.add.text(left, 98, '', textStyle(12, TEXT_COLORS.sub));
@@ -263,12 +264,12 @@ export class BattleScene extends Phaser.Scene {
     this.pauseButton.setVisible(false);
     this.speedButton.setVisible(false);
 
-    this.add.text(left, 166, '地形カード（準備フェーズのみ）', textStyle(12, TEXT_COLORS.sub));
+    this.add.text(left, 164, '地形カード（準備フェーズのみ）', textStyle(12, TEXT_COLORS.sub));
     const cardSize = 44;
     const cardGap = (width - cardSize * FIRST_STAGE.handSize) / (FIRST_STAGE.handSize - 1);
     for (let i = 0; i < FIRST_STAGE.handSize; i++) {
       this.cardButtons.push(
-        new Button(this, left + i * (cardSize + cardGap), 186, '', {
+        new Button(this, left + i * (cardSize + cardGap), 182, '', {
           width: cardSize,
           height: cardSize,
           fontSize: 18,
@@ -278,51 +279,57 @@ export class BattleScene extends Phaser.Scene {
       );
     }
 
-    this.add.text(left, 244, 'タワー（1〜3キーでも選べる）', textStyle(12, TEXT_COLORS.sub));
+    this.add.text(left, 236, 'タワー（1〜3キーでも選べる）', textStyle(12, TEXT_COLORS.sub));
     const towerWidth = (width - 12) / 3;
     TOWER_ORDER.forEach((id, i) => {
       const def = TOWERS[id];
       this.towerButtons.set(
         id,
-        new Button(this, left + i * (towerWidth + 6), 264, `${def.name}\n${def.cost}G`, {
+        new Button(this, left + i * (towerWidth + 6), 254, `${def.cost}G`, {
           width: towerWidth,
           height: 50,
-          fontSize: 13,
+          fontSize: 12,
+          labelOffsetY: 15,
           onClick: () => this.selectTower(id),
           onHover: () => this.setInfo(`${def.name}（${def.cost}G）：${def.description}`),
         }),
       );
     });
 
-    const job = HERO_JOBS[this.state.hero.job];
-    this.add.text(left, 328, '英雄', textStyle(12, TEXT_COLORS.sub));
-    this.heroNameText = this.add.text(left, 346, '', textStyle(15, TEXT_COLORS.main, true));
-    this.heroInfoText = this.add.text(left, 382, '', textStyle(12, TEXT_COLORS.sub));
-    this.heroButton = new Button(this, left, 402, '出撃する', {
-      width,
-      height: 34,
-      onClick: () => this.onDeploy(),
-      onHover: () =>
-        this.setInfo(`${job.name}：${job.description}倒れても${job.respawnTime}秒後に再び出撃できる。出撃後は右クリックで移動。`),
+    // 英雄：3人連れていて、戦場に出せるのは1人ずつ
+    this.add.text(left, 312, '英雄（クリックで出撃・同時に1人）', textStyle(12, TEXT_COLORS.sub));
+    this.state.heroes.forEach((hero, i) => {
+      const y = 330 + i * 43;
+      const job = HERO_JOBS[hero.job];
+      const button = new Button(this, left, y, '', {
+        width,
+        height: 40,
+        onClick: () => this.onDeploy(hero.uid),
+        onHover: () =>
+          this.setInfo(`${job.name}${hero.name}：${job.description}倒れても${job.respawnTime}秒後に再び出撃できる。`),
+      });
+      const name = this.add.text(left + 42, y + 3, `${job.name} ${hero.name}`, textStyle(12, TEXT_COLORS.main, true));
+      const deaths = this.add.text(left + width - 6, y + 3, '', textStyle(11, TEXT_COLORS.sub)).setOrigin(1, 0);
+      const status = this.add.text(left + 42, y + 24, '', textStyle(11, TEXT_COLORS.sub));
+      this.heroRows.push({ uid: hero.uid, y, button, name, status, deaths });
     });
 
     // 味方と敵の見分け方
-    this.add.text(left, 446, '見分け方', textStyle(12, TEXT_COLORS.sub));
     const legend = this.add.graphics().setDepth(1);
     legend.fillStyle(COLORS.ally);
-    legend.fillCircle(left + 7, 476, 6);
+    legend.fillCircle(left + 7, 470, 6);
     legend.lineStyle(2, COLORS.heroOutline, 1);
-    legend.strokeCircle(left + 7, 476, 6);
-    this.add.text(left + 20, 468, '味方は青（英雄・タワー・城）', textStyle(12, TEXT_COLORS.ally));
+    legend.strokeCircle(left + 7, 470, 6);
+    this.add.text(left + 20, 462, '味方は青（英雄・タワー・城）', textStyle(12, TEXT_COLORS.ally));
     legend.fillStyle(ENEMIES.goblin.color);
-    legend.fillCircle(left + 7, 496, 6);
+    legend.fillCircle(left + 7, 489, 6);
     legend.lineStyle(2, COLORS.enemy, 1);
-    legend.strokeCircle(left + 7, 496, 6);
-    this.add.text(left + 20, 488, '敵は赤（敵の城から攻めてくる）', textStyle(12, TEXT_COLORS.enemy));
+    legend.strokeCircle(left + 7, 489, 6);
+    this.add.text(left + 20, 481, '敵は赤（敵の城から攻めてくる）', textStyle(12, TEXT_COLORS.enemy));
 
     this.add.text(
       left,
-      512,
+      506,
       ['左クリック：置く・建てる', '右クリック：英雄を移動', 'Esc：選択をやめる', 'Space：一時停止'].join('\n'),
       { ...textStyle(11, TEXT_COLORS.sub), lineSpacing: 3 },
     );
@@ -398,8 +405,8 @@ export class BattleScene extends Phaser.Scene {
     this.infoMessage = '';
   }
 
-  private onDeploy(): void {
-    const result = deployHero(this.state);
+  private onDeploy(heroUid: number): void {
+    const result = deployHero(this.state, heroUid);
     if (!result.ok) return this.showError(result.reason);
     this.setInfo('英雄が城から出撃しました。マップを右クリックすると、その場所へ移動します。');
   }
@@ -468,13 +475,19 @@ export class BattleScene extends Phaser.Scene {
           this.castleFlash = 0.35;
           break;
         case 'heroStrike':
-          this.addEffect('spark', toPixel(event.x), toPixel(event.y), 0, 0, 0, 0xffffff, 0.15);
+          if (event.job === 'swordsman') {
+            this.addEffect('spark', toPixel(event.toX), toPixel(event.toY), 0, 0, 0, 0xffffff, 0.15);
+          } else {
+            const color = HERO_SHOT_COLORS[event.job];
+            this.addEffect('line', toPixel(event.fromX), toPixel(event.fromY), toPixel(event.toX), toPixel(event.toY), 0, color, 0.15);
+          }
           break;
         case 'heroDown': {
-          const hero = this.state.hero;
+          const hero = this.state.heroes.find((h) => h.uid === event.heroUid);
+          if (!hero) break;
           const job = HERO_JOBS[hero.job];
           this.addEffect('ring', toPixel(event.x), toPixel(event.y), 0, 0, TILE * 0.8, 0xff5a4f, 0.6);
-          this.showError(`${job.name}${hero.name}が倒れた…（${job.respawnTime}秒後に再び出撃できます）`);
+          this.showError(`${job.name}${hero.name}が倒れた…（${job.respawnTime}秒後に再び出撃できます。ほかの英雄に交代もできます）`);
           break;
         }
         case 'waveStart':
@@ -508,8 +521,6 @@ export class BattleScene extends Phaser.Scene {
   private drawTerrain(route: GridPoint[]): void {
     const g = this.terrainGfx;
     g.clear();
-    for (const label of this.terrainLabels) label.destroy();
-    this.terrainLabels = [];
     const { grid, entrance, castle, seed } = this.state;
 
     for (let y = 0; y < grid.height; y++) {
@@ -520,10 +531,17 @@ export class BattleScene extends Phaser.Scene {
         g.fillStyle(COLORS.plainShades[tileHash(seed, x, y, 1) % COLORS.plainShades.length]);
         g.fillRect(left, top, TILE, TILE);
         if (terrain === 'plain') this.drawGrassDetail(g, left, top, tileHash(seed, x, y, 2));
-        if (terrain === 'mountain') this.drawMountain(g, left, top);
-        if (terrain === 'forest') this.drawForest(g, left, top);
+        if (terrain === 'mountain') {
+          g.fillStyle(COLORS.mountainBase);
+          g.fillRect(left, top, TILE, TILE);
+          drawIcon(g, 'mountain', left + TILE / 2, top + TILE / 2, TILE * 0.88);
+        }
+        if (terrain === 'forest') {
+          g.fillStyle(COLORS.forestBase);
+          g.fillRect(left, top, TILE, TILE);
+          drawIcon(g, 'forest', left + TILE / 2, top + TILE / 2, TILE * 0.88);
+        }
         if (terrain === 'lake') this.drawLake(g, left, top, tileHash(seed, x, y, 3));
-        if (terrain !== 'plain') this.addTerrainLabel(left + 3, top + 1, TERRAIN[terrain].icon, 11);
       }
     }
 
@@ -537,9 +555,7 @@ export class BattleScene extends Phaser.Scene {
 
     // 敵の城（左端の中央）は赤、味方の城（右端の中央）は青
     this.drawCastle(g, entrance, COLORS.enemyDark, COLORS.entrance, COLORS.enemyCastleTop, COLORS.enemy);
-    this.addTerrainLabel(toPixel(entrance.x), toPixel(entrance.y) + 5, '敵の城', 12, true);
     this.drawCastle(g, castle, COLORS.allyDark, COLORS.castle, COLORS.castleTop, COLORS.ally);
-    this.addTerrainLabel(toPixel(castle.x), toPixel(castle.y) + 5, '城', 16, true);
   }
 
   private drawCastle(g: Phaser.GameObjects.Graphics, at: GridPoint, base: number, wall: number, top: number, border: number): void {
@@ -551,6 +567,15 @@ export class BattleScene extends Phaser.Scene {
     g.fillRect(left + 6, topY + 14, TILE - 12, TILE - 20);
     g.fillStyle(top);
     for (let i = 0; i < 3; i++) g.fillRect(left + 6 + i * 13, topY + 7, 10, 9);
+    // 門
+    g.fillStyle(base);
+    g.fillRect(left + TILE / 2 - 6, topY + TILE - 18, 12, 12);
+    g.fillCircle(left + TILE / 2, topY + TILE - 18, 6);
+    // 旗
+    g.lineStyle(2, 0xe8e8e8, 1);
+    g.lineBetween(left + TILE / 2, topY + 7, left + TILE / 2, topY - 4);
+    g.fillStyle(border);
+    g.fillTriangle(left + TILE / 2, topY - 4, left + TILE / 2 + 11, topY, left + TILE / 2, topY + 3);
     g.lineStyle(2, border, 1);
     g.strokeRect(left + 2, topY + 2, TILE - 4, TILE - 4);
   }
@@ -584,34 +609,6 @@ export class BattleScene extends Phaser.Scene {
     const y = top + 14 + (hash % 8);
     g.lineBetween(left + 10, y, left + 22, y);
     g.lineBetween(left + 24, y + 12, left + 38, y + 12);
-  }
-
-  private addTerrainLabel(x: number, y: number, text: string, size: number, centered = false): void {
-    const label = this.add
-      .text(x, y, text, { ...textStyle(size, '#ffffff', centered), stroke: '#000000', strokeThickness: centered ? 3 : 0 })
-      .setDepth(1)
-      .setAlpha(centered ? 1 : 0.75);
-    if (centered) label.setOrigin(0.5);
-    this.terrainLabels.push(label);
-  }
-
-  private drawMountain(g: Phaser.GameObjects.Graphics, left: number, top: number): void {
-    g.fillStyle(COLORS.mountainBase);
-    g.fillRect(left, top, TILE, TILE);
-    g.fillStyle(COLORS.mountain);
-    g.fillTriangle(left + 5, top + TILE - 6, left + TILE / 2, top + 8, left + TILE - 5, top + TILE - 6);
-    g.fillStyle(COLORS.snow);
-    g.fillTriangle(left + TILE / 2 - 6, top + 17, left + TILE / 2, top + 8, left + TILE / 2 + 6, top + 17);
-  }
-
-  private drawForest(g: Phaser.GameObjects.Graphics, left: number, top: number): void {
-    g.fillStyle(COLORS.forestBase);
-    g.fillRect(left, top, TILE, TILE);
-    g.fillStyle(COLORS.forestTreeDark);
-    g.fillCircle(left + 15, top + 31, 10);
-    g.fillStyle(COLORS.forestTree);
-    g.fillCircle(left + 32, top + 29, 11);
-    g.fillCircle(left + 23, top + 17, 10);
   }
 
   /** 道の上に、敵の進む向きを示す矢印を描く */
@@ -704,82 +701,41 @@ export class BattleScene extends Phaser.Scene {
       g.fillRect(state.castle.x * TILE, state.castle.y * TILE, TILE, TILE);
     }
 
-    const seenTowers = new Set<number>();
     for (const tower of state.towers) {
       const def = TOWERS[tower.type];
       const left = tower.x * TILE;
       const top = tower.y * TILE;
-      // 味方なので青い台座と青い縁。中の色はタワーの種類
+      // 味方なので青い台座と青い縁。中の色とアイコンはタワーの種類
       g.fillStyle(COLORS.allyDark);
       g.fillRect(left + 4, top + 4, TILE - 8, TILE - 8);
       g.lineStyle(2, COLORS.ally, 1);
       g.strokeRect(left + 4, top + 4, TILE - 8, TILE - 8);
       g.fillStyle(def.color);
-      g.fillRect(left + 10, top + 10, TILE - 20, TILE - 20);
-      seenTowers.add(tower.uid);
-      if (!this.towerLabels.has(tower.uid)) {
-        const label = this.add
-          .text(toPixel(tower.x), toPixel(tower.y), def.icon, { ...textStyle(18, '#ffffff', true), stroke: '#000000', strokeThickness: 3 })
-          .setOrigin(0.5)
-          .setDepth(5);
-        this.towerLabels.set(tower.uid, label);
-      }
-    }
-    for (const [uid, label] of this.towerLabels) {
-      if (!seenTowers.has(uid)) {
-        label.destroy();
-        this.towerLabels.delete(uid);
-      }
+      g.fillRect(left + 9, top + 9, TILE - 18, TILE - 18);
+      drawIcon(g, def.icon, toPixel(tower.x), toPixel(tower.y), TILE * 0.5);
     }
 
-    const seenEnemies = new Set<number>();
     for (const enemy of state.enemies) {
       if (enemy.dead) continue;
       const def = ENEMIES[enemy.type];
       const cx = toPixel(enemy.x);
       const cy = toPixel(enemy.y);
       const r = def.radius * TILE;
-      // 敵なので赤い縁
+      // 敵なので赤い縁。中のアイコンで種類が分かる
       g.fillStyle(def.color);
+      g.fillCircle(cx, cy, r);
       g.lineStyle(3, COLORS.enemy, 1);
-      if (def.shape === 'circle') {
-        g.fillCircle(cx, cy, r);
-        g.strokeCircle(cx, cy, r);
-      } else {
-        g.beginPath();
-        g.moveTo(cx, cy - r - 2);
-        g.lineTo(cx + r + 2, cy);
-        g.lineTo(cx, cy + r + 2);
-        g.lineTo(cx - r - 2, cy);
-        g.closePath();
-        g.fillPath();
-        g.strokePath();
-      }
+      g.strokeCircle(cx, cy, r);
+      drawIcon(g, def.icon, cx, cy, r * 1.5);
       if (enemy.slowMultiplier < 1) {
         g.lineStyle(2, COLORS.slowRing, 0.9);
         g.strokeCircle(cx, cy, r + 4);
       }
       if (enemy.hp < enemy.maxHp) this.drawBar(g, cx, cy - r - 9, TILE * 0.6, enemy.hp / enemy.maxHp, COLORS.enemyHp);
-      seenEnemies.add(enemy.uid);
-      let label = this.enemyLabels.get(enemy.uid);
-      if (!label) {
-        label = this.add
-          .text(cx, cy, def.icon, { ...textStyle(11, '#ffffff', true), stroke: '#000000', strokeThickness: 3 })
-          .setOrigin(0.5)
-          .setDepth(5);
-        this.enemyLabels.set(enemy.uid, label);
-      }
-      label.setPosition(cx, cy);
-    }
-    for (const [uid, label] of this.enemyLabels) {
-      if (!seenEnemies.has(uid)) {
-        label.destroy();
-        this.enemyLabels.delete(uid);
-      }
     }
 
-    const hero = state.hero;
-    if (hero.status === 'active') {
+    const hero = activeHero(state);
+    if (hero) {
       const cx = toPixel(hero.x);
       const cy = toPixel(hero.y);
       const destination = hero.path[hero.path.length - 1];
@@ -788,16 +744,30 @@ export class BattleScene extends Phaser.Scene {
         g.strokeCircle(toPixel(destination.x), toPixel(destination.y), 8);
         g.lineBetween(cx, cy, toPixel(destination.x), toPixel(destination.y));
       }
-      // 味方なので青い体に白い縁
-      g.fillStyle(COLORS.ally);
-      g.fillCircle(cx, cy, TILE * 0.34);
-      g.lineStyle(3, COLORS.heroOutline, 1);
-      g.strokeCircle(cx, cy, TILE * 0.34);
+      const job = HERO_JOBS[hero.job];
+      if (job.range > 1.5) {
+        // 遠くを攻撃できる英雄は、攻撃が届く範囲をうっすら見せる
+        g.lineStyle(1, COLORS.ally, 0.35);
+        g.strokeCircle(cx, cy, job.range * TILE);
+      }
+      this.drawHeroToken(g, hero, cx, cy, TILE * 0.34, true);
       this.drawBar(g, cx, cy - TILE * 0.34 - 9, TILE * 0.7, hero.hp / hero.maxHp, COLORS.allyHp);
-      this.heroLabel.setPosition(cx, cy).setVisible(true);
-    } else {
-      this.heroLabel.setVisible(false);
     }
+  }
+
+  /** 使えないボタンの絵を暗くする */
+  private dimArea(g: Phaser.GameObjects.Graphics, area: Phaser.GameObjects.Rectangle): void {
+    g.fillStyle(COLORS.buttonDisabled, 0.65);
+    g.fillRect(area.x + 1, area.y + 1, area.width - 2, area.height - 2);
+  }
+
+  /** 英雄の丸いコマ（味方なので青い体に白い縁、中に役職のアイコン） */
+  private drawHeroToken(g: Phaser.GameObjects.Graphics, hero: Hero, cx: number, cy: number, radius: number, available: boolean): void {
+    g.fillStyle(available ? COLORS.ally : 0x4a5062);
+    g.fillCircle(cx, cy, radius);
+    g.lineStyle(3, COLORS.heroOutline, available ? 1 : 0.4);
+    g.strokeCircle(cx, cy, radius);
+    drawIcon(g, HERO_JOBS[hero.job].icon, cx, cy, radius * 1.45);
   }
 
   /** 体力のバー。味方は青、敵は赤 */
@@ -865,10 +835,7 @@ export class BattleScene extends Phaser.Scene {
       const card = state.hand[i];
       button.setVisible(card !== undefined);
       if (!card) return;
-      button
-        .setText(TERRAIN[card.terrain].icon)
-        .setEnabled(prep)
-        .setSelected(this.selection?.kind === 'card' && this.selection.index === i);
+      button.setEnabled(prep).setSelected(this.selection?.kind === 'card' && this.selection.index === i);
     });
 
     for (const [id, button] of this.towerButtons) {
@@ -877,25 +844,59 @@ export class BattleScene extends Phaser.Scene {
         .setSelected(this.selection?.kind === 'tower' && this.selection.id === id);
     }
 
-    const hero = state.hero;
-    const job = HERO_JOBS[hero.job];
-    setText(this.heroNameText, `${job.name} ${hero.name}`);
-    setText(this.heroInfoText, `倒れた回数 ${hero.deaths}`);
-    if (hero.status === 'ready') this.heroButton.setText('出撃する').setEnabled(this.isRunning());
-    else if (hero.status === 'active') this.heroButton.setText('出撃中（右クリックで移動）').setEnabled(false);
-    else this.heroButton.setText(`復活まで ${Math.ceil(hero.respawnLeft)}秒`).setEnabled(false);
-
     const g = this.sidebarGfx;
     g.clear();
-    const barY = 370;
-    g.fillStyle(COLORS.hpBack);
-    g.fillRect(this.sidebarLeft, barY, this.sidebarInner, 8);
-    if (hero.status === 'down') {
-      g.fillStyle(0x6b7080);
-      g.fillRect(this.sidebarLeft, barY, this.sidebarInner * (1 - hero.respawnLeft / job.respawnTime), 8);
-    } else {
-      g.fillStyle(COLORS.allyHp);
-      g.fillRect(this.sidebarLeft, barY, this.sidebarInner * (hero.hp / hero.maxHp), 8);
+
+    // 地形カードとタワーのボタンにアイコンを描く
+    this.cardButtons.forEach((button, i) => {
+      const card = state.hand[i];
+      const icon = card ? TERRAIN[card.terrain].icon : null;
+      if (!icon) return;
+      const bg = button.background;
+      drawIcon(g, icon, bg.x + bg.width / 2, bg.y + bg.height / 2, 34);
+      if (!prep) this.dimArea(g, bg);
+    });
+    for (const [id, button] of this.towerButtons) {
+      const def = TOWERS[id];
+      const bg = button.background;
+      const cx = bg.x + bg.width / 2;
+      const cy = bg.y + 18;
+      g.fillStyle(def.color);
+      g.fillRect(cx - 13, cy - 13, 26, 26);
+      drawIcon(g, def.icon, cx, cy, 22);
+      if (!(this.isRunning() && state.gold >= def.cost)) this.dimArea(g, bg);
+    }
+
+    // 英雄の一覧
+    const someoneActive = activeHero(state) !== null;
+    for (const row of this.heroRows) {
+      const hero = state.heroes.find((h) => h.uid === row.uid);
+      if (!hero) continue;
+      const job = HERO_JOBS[hero.job];
+      const canDeploy = this.isRunning() && hero.status === 'ready' && !someoneActive;
+      row.button.setEnabled(canDeploy || hero.status === 'active').setSelected(hero.status === 'active');
+      setText(row.deaths, `倒れた ${hero.deaths}回`);
+      let status: string;
+      if (hero.status === 'active') status = '出撃中（右クリックで移動）';
+      else if (hero.status === 'down') status = `復活まで ${Math.ceil(hero.respawnLeft)}秒`;
+      else if (someoneActive) status = '待機中（交代は倒れたとき）';
+      else status = '待機中（クリックで出撃）';
+      setText(row.status, status);
+
+      const left = this.sidebarLeft;
+      this.drawHeroToken(g, hero, left + 20, row.y + 20, 15, hero.status !== 'down');
+      // 体力（倒れているときは復活までの進み具合）
+      const barX = left + 42;
+      const barWidth = this.sidebarInner - 48;
+      g.fillStyle(COLORS.hpBack);
+      g.fillRect(barX, row.y + 19, barWidth, 4);
+      if (hero.status === 'down') {
+        g.fillStyle(0x6b7080);
+        g.fillRect(barX, row.y + 19, barWidth * (1 - hero.respawnLeft / job.respawnTime), 4);
+      } else {
+        g.fillStyle(COLORS.allyHp);
+        g.fillRect(barX, row.y + 19, barWidth * (hero.hp / hero.maxHp), 4);
+      }
     }
   }
 
@@ -914,7 +915,7 @@ export class BattleScene extends Phaser.Scene {
     } else if (this.state.phase === 'prep') {
       text = '土の道が敵の通るルート。道を変えられるのは地形カードだけ（全部使わなくてもOK）。タワーは道の横に建てよう。準備ができたら「戦闘開始」。';
     } else {
-      text = 'タワーは戦闘中も建てられる。英雄を出撃させたら、マップを右クリックして敵の前に立たせよう。';
+      text = 'タワーは戦闘中も建てられる。英雄は右の一覧から1人ずつ出撃でき、倒れたらほかの英雄に交代できる。出撃中の英雄はマップを右クリックして動かそう。';
     }
     setText(this.messageText, text);
     if (this.messageText.style.color !== color) this.messageText.setColor(color);
@@ -974,13 +975,11 @@ export class BattleScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setDepth(depth + 1);
 
-    const hero = state.hero;
-    const job = HERO_JOBS[hero.job];
     const lines = [
       `残りの城HP　${state.castleHp} / ${state.stage.castleHp}`,
       `到達ウェーブ　${Math.max(1, state.waveIndex + 1)} / ${state.stage.waves.length}`,
       `倒した敵　${state.kills}`,
-      `${job.name}${hero.name}が倒れた回数　${hero.deaths}`,
+      `倒れた回数　${state.heroes.map((h) => `${HERO_JOBS[h.job].name}${h.name} ${h.deaths}回`).join('　')}`,
     ];
     if (state.deathLog.length > 0) {
       lines.push('', '― 冒険の記録 ―');
